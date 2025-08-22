@@ -1,0 +1,10 @@
+[package]
+name = "fleen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.32.1"
+egui_ltreeview = "0.5.3"
+rfd = "0.15.4"
+thiserror = "2.0.16"
