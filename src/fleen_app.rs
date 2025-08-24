@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::fs;
+use std::io::Error;
 use std::path::PathBuf;
 use std::process::Command;
 use thiserror::Error;
@@ -12,7 +14,11 @@ pub enum FleenError {
     #[error("Root dir is nonempty, you probably don't want to create an app here: {0}")]
     RootDirPopulatedError(PathBuf),
     #[error("Failed to open {0}: {1}")]
-    FileOpenError(String, String)
+    FileIoError(String, String),
+    #[error("Can't create {0} because it already exists")]
+    FileExistsError(PathBuf),
+    #[error("Can't create {0}: {1}")]
+    FileCreateError(PathBuf, String)
 }
 
 #[derive(Clone, Debug)]
@@ -20,6 +26,11 @@ pub enum TreeEntry {
     File(PathBuf),
     Dir(PathBuf),
     CloseDir
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum FileType {
+    File, Dir
 }
 
 pub struct FleenApp {
@@ -83,8 +94,41 @@ impl FleenApp {
 
     pub fn open_filename(&self, filename: &String) -> Result<(), FleenError> {
         Command::new("open").arg(filename.clone()).spawn().map_err(|err| {
-            FleenError::FileOpenError(filename.clone(), err.to_string())
+            FleenError::FileIoError(filename.clone(), err.to_string())
         })?;
+        Ok(())
+    }
+
+    pub fn create_page(&self, file_type: FileType, name: &String, parent: Option<&String>) -> Result<(), FleenError> {
+        let mut target = match parent {
+            Some(s) => PathBuf::from(s),
+            None => self.root.clone()
+        };
+        target.push(name.clone());
+        if target.exists() {
+            return Err(FleenError::FileExistsError(target))
+        }
+
+        match file_type {
+            FileType::File => std::fs::write(target.clone(), []),
+            FileType::Dir => std::fs::create_dir(target.clone())
+        }.map_err(|err| FleenError::FileCreateError(target.clone(), err.to_string()))?;
+
+        self.refresh_file_cache(true);
+        if file_type == FileType::File {
+            self.open_filename(&target.to_string_lossy().to_string())?
+        }
+        Ok(())
+    }
+
+    pub fn delete_page(&self, path: &String) -> Result<(), FleenError> {
+        let target = PathBuf::from(path);
+        if target.is_dir() {
+            fs::remove_dir_all(target)
+        } else {
+            fs::remove_file(target)
+        }.map_err(|err| FleenError::FileIoError(path.clone(), err.to_string()))?;
+        self.refresh_file_cache(true);
         Ok(())
     }
 }
