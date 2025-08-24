@@ -1,7 +1,7 @@
 mod fleen_app;
 
-use std::path::PathBuf;
-use eframe::egui::{Color32, Context, Id, Stroke};
+use std::path::{Path, PathBuf};
+use eframe::egui::{Color32, Context, Id, RichText};
 use eframe::{egui, Frame};
 use egui_ltreeview::Action;
 use crate::fleen_app::{FileType, FleenApp, FleenError, TreeEntry};
@@ -19,6 +19,7 @@ enum DialogMode {
     RenameFile(String)
 }
 
+#[derive(Default)]
 struct FleenUi {
     app: Option<FleenApp>,
     error: Option<FleenError>,
@@ -26,77 +27,67 @@ struct FleenUi {
     dialog_mode: Option<DialogMode>
 }
 
-impl Default for FleenUi {
-    fn default() -> Self {
-        Self {
-            app: None,
-            error: None,
-            selected_file: None,
-            dialog_mode: None
-        }
-    }
-}
-
 impl FleenUi {
     fn site_chooser(&mut self, ctx: &Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.label("No site selected!");
 
-            if ui.button("Open site...").clicked() {
-                if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                    match FleenApp::open(path) {
-                        Ok(app) => { self.app = Some(app) }
-                        Err(err) => { self.error = Some(err) }
-                    }
+            if ui.button("Open site...").clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
+                match FleenApp::open(path) {
+                    Ok(app) => { self.app = Some(app) }
+                    Err(err) => { self.error = Some(err) }
                 }
             }
 
-            if ui.button("New site...").clicked() {
-                if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                    match FleenApp::create(path) {
-                        Ok(app) => { self.app = Some(app) }
-                        Err(err) => { self.error = Some(err) }
-                    }
+            if ui.button("New site...").clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
+                match FleenApp::create(path) {
+                    Ok(app) => { self.app = Some(app) }
+                    Err(err) => { self.error = Some(err) }
                 }
             }
         });
     }
 
     fn display(&mut self, ctx: &Context) {
-        let mut new_clicked = false;
+        let mut just_clicked = false;
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     self.tree_view(ui);
-                    if ui.add(egui::Button::new("Open")).clicked() {
-                        if let Some(fname) = &self.selected_file {
+                    if ui.add(egui::Button::new("Open")).clicked() &&
+                        let Some(fname) = &self.selected_file {
                             self.handle_error(self.app.as_ref().unwrap().open_filename(fname))
-                        }
                     }
 
-                    if ui.add(egui::Button::new("New page")).clicked() {
-                        new_clicked = true;
+                    let new_btn = egui::Button::new(RichText::new("New page").color(Color32::WHITE)).fill(Color32::DARK_GREEN);
+                    if ui.add(new_btn).clicked() {
+                        just_clicked = true;
                         self.dialog_mode = Some(DialogMode::NewFile(String::new()));
                     }
 
-
+                    let rename_btn = egui::Button::new("Rename");
                     let delete_btn = egui::Button::new("Delete").fill(Color32::DARK_RED);
-                    if let Some(selected) = &self.selected_file {
+                    if self.root_selected() || self.selected_file.is_none() {
+                        ui.add_enabled(false, rename_btn);
+                        ui.add_enabled(false, delete_btn);
+                    } else if let Some(selected) = &self.selected_file {
+                        if ui.add(rename_btn).clicked() {
+                            self.dialog_mode = Some(DialogMode::RenameFile(label_for_path(&PathBuf::from(&selected))));
+                            just_clicked = true;
+                        }
                         if ui.add(delete_btn).clicked() {
                             self.dialog_mode = Some(DialogMode::ConfirmDelete(selected.clone()));
                         }
-                    } else {
-                        ui.add_enabled(false, delete_btn);
                     }
                 });
             })
         });
 
         match self.dialog_mode {
-            Some(DialogMode::NewFile(_)) => self.new_file_dialog(ctx, new_clicked),
+            Some(DialogMode::NewFile(_)) => self.new_file_dialog(ctx, just_clicked),
             Some(DialogMode::ConfirmDelete(_)) => self.confirm_delete_dialog(ctx),
-            Some(DialogMode::RenameFile(_)) => todo!(),
+            Some(DialogMode::RenameFile(_)) => self.rename_dialog(ctx, just_clicked),
             None => {}
         }
     }
@@ -118,7 +109,7 @@ impl FleenUi {
         for action in actions {
             match action {
                 Action::SetSelected(files) => {
-                    self.selected_file = files.first().map(String::clone)
+                    self.selected_file = files.first().cloned()
                 }
                 Action::Activate(activate) => {
                     for fname in activate.selected {
@@ -173,6 +164,35 @@ impl FleenUi {
         });
     }
 
+    fn rename_dialog(&mut self, ctx: &Context, just_clicked: bool) {
+        egui::Window::new("Rename").collapsible(false).resizable(false).show(ctx, |ui| {
+            ui.label("New name");
+            let Some(DialogMode::RenameFile(fname)) = &mut self.dialog_mode else { unreachable!() };
+            let name_field = egui::TextEdit::singleline(fname);
+            let resp = ui.add(name_field);
+            let enter_key = resp.lost_focus();
+            if just_clicked { resp.request_focus() } // See new_file_dialog
+
+            ui.horizontal(|ui| {
+                let btn = ui.button("Rename");
+                if enter_key { btn.request_focus() }
+                if btn.clicked() {
+                    let Some(DialogMode::RenameFile(fname)) = &self.dialog_mode else { unreachable!() };
+                    let app = self.app.as_ref().unwrap();
+                    let r = app.rename_page(self.selected_file.as_ref().unwrap(), fname);
+                    if r.is_err() {
+                        self.handle_error(r);
+                    } else {
+                        self.dialog_mode = None; // Close the dialog, we're done
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    self.dialog_mode = None
+                }
+            })
+        });
+    }
+
     fn confirm_delete_dialog(&mut self, ctx: &Context) {
         let (mut del, mut cancel) = (false, false);
         let Some(DialogMode::ConfirmDelete(fname)) = &self.dialog_mode else { unreachable!() };
@@ -201,6 +221,14 @@ impl FleenUi {
             self.error = Some(e)
         }
     }
+
+    fn root_selected(&self) -> bool {
+        if let Some(path) = &self.selected_file {
+            path == &self.app.as_ref().unwrap().root_path()
+        } else {
+            false
+        }
+    }
 }
 
 impl eframe::App for FleenUi {
@@ -222,10 +250,10 @@ impl eframe::App for FleenUi {
     }
 }
 
-fn label_for_path(path: &PathBuf) -> String {
+fn label_for_path(path: &Path) -> String {
     path.file_name().unwrap().to_string_lossy().to_string()
 }
 
-fn id_for_path(path: &PathBuf) -> String {
+fn id_for_path(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }

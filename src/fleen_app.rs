@@ -1,24 +1,23 @@
 use std::cell::RefCell;
 use std::fs;
-use std::io::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
-use crate::fleen_app::FleenError::{RootDirNonexistenceError, RootDirPopulatedError};
+use crate::fleen_app::FleenError::{RootDirNonexistence, RootDirPopulated};
 use crate::fleen_app::TreeEntry::{CloseDir, Dir};
 
 #[derive(Error, Debug, Clone)]
 pub enum FleenError {
     #[error("Can't reach root dir {0}")]
-    RootDirNonexistenceError(PathBuf),
+    RootDirNonexistence(PathBuf),
     #[error("Root dir is nonempty, you probably don't want to create an app here: {0}")]
-    RootDirPopulatedError(PathBuf),
-    #[error("Failed to open {0}: {1}")]
-    FileIoError(String, String),
+    RootDirPopulated(PathBuf),
+    #[error("IO error on {0}: {1}")]
+    FileIo(String, String),
     #[error("Can't create {0} because it already exists")]
-    FileExistsError(PathBuf),
+    FileExists(PathBuf),
     #[error("Can't create {0}: {1}")]
-    FileCreateError(PathBuf, String)
+    FileCreate(PathBuf, String)
 }
 
 #[derive(Clone, Debug)]
@@ -42,7 +41,7 @@ impl FleenApp {
     pub fn open(root: PathBuf) -> Result<Self, FleenError> {
         match root.try_exists() {
             Ok(true) => Ok(Self { root, files_cache: RefCell::new(None) }),
-            _ => Err(RootDirNonexistenceError(root))
+            _ => Err(RootDirNonexistence(root))
         }
     }
 
@@ -50,13 +49,13 @@ impl FleenApp {
         match root.read_dir() {
             Ok(mut iter) => {
                 if iter.next().is_some() {
-                    Err(RootDirPopulatedError(root))
+                    Err(RootDirPopulated(root))
                 } else {
                     Ok(Self { root, files_cache: RefCell::new(None) })
                 }
             }
             Err(_) => {
-                Err(RootDirNonexistenceError(root))
+                Err(RootDirNonexistence(root))
             }
         }
     }
@@ -66,7 +65,7 @@ impl FleenApp {
         if self.files_cache.borrow().is_none() || force {
             let mut entries = vec![];
 
-            fn visit_dir(dir: &PathBuf, entries: &mut Vec<TreeEntry>) {
+            fn visit_dir(dir: &Path, entries: &mut Vec<TreeEntry>) {
                 for entry in dir.read_dir().unwrap() {
                     let path = entry.unwrap().path();
                     if path.is_file() && !path.file_name().unwrap().to_str().unwrap().starts_with('.') {
@@ -92,31 +91,31 @@ impl FleenApp {
         self.files_cache.borrow().clone().expect("Can't happen because we just refreshed the cache")
     }
 
-    pub fn open_filename(&self, filename: &String) -> Result<(), FleenError> {
-        Command::new("open").arg(filename.clone()).spawn().map_err(|err| {
-            FleenError::FileIoError(filename.clone(), err.to_string())
+    pub fn open_filename(&self, filename: &str) -> Result<(), FleenError> {
+        Command::new("open").arg(filename).spawn().map_err(|err| {
+            FleenError::FileIo(filename.to_owned(), err.to_string())
         })?;
         Ok(())
     }
 
-    pub fn create_page(&self, file_type: FileType, name: &String, parent: Option<&String>) -> Result<(), FleenError> {
+    pub fn create_page(&self, file_type: FileType, name: &str, parent: Option<&String>) -> Result<(), FleenError> {
         let mut target = match parent {
             Some(s) => PathBuf::from(s),
             None => self.root.clone()
         };
-        target.push(name.clone());
+        target.push(name);
         if target.exists() {
-            return Err(FleenError::FileExistsError(target))
+            return Err(FleenError::FileExists(target))
         }
 
         match file_type {
             FileType::File => std::fs::write(target.clone(), []),
             FileType::Dir => std::fs::create_dir(target.clone())
-        }.map_err(|err| FleenError::FileCreateError(target.clone(), err.to_string()))?;
+        }.map_err(|err| FleenError::FileCreate(target.clone(), err.to_string()))?;
 
         self.refresh_file_cache(true);
         if file_type == FileType::File {
-            self.open_filename(&target.to_string_lossy().to_string())?
+            self.open_filename(target.to_string_lossy().as_ref())?
         }
         Ok(())
     }
@@ -127,8 +126,21 @@ impl FleenApp {
             fs::remove_dir_all(target)
         } else {
             fs::remove_file(target)
-        }.map_err(|err| FleenError::FileIoError(path.clone(), err.to_string()))?;
+        }.map_err(|err| FleenError::FileIo(path.clone(), err.to_string()))?;
         self.refresh_file_cache(true);
         Ok(())
+    }
+
+    pub fn rename_page(&self, target: &String, new_name: &str) -> Result<(), FleenError> {
+        let path = PathBuf::from(target);
+        let mut new_path = path.clone();
+        new_path.set_file_name(new_name);
+        fs::rename(path, new_path).map_err(|err| FleenError::FileIo(target.clone(), err.to_string()))?;
+        self.refresh_file_cache(true);
+        Ok(())
+    }
+
+    pub fn root_path(&self) -> String {
+        self.root.to_string_lossy().to_string()
     }
 }
