@@ -1,4 +1,5 @@
 mod fleen_app;
+mod renderer;
 
 use std::path::{Path, PathBuf};
 use eframe::egui::{Color32, Context, Id, RichText};
