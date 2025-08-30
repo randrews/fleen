@@ -3,7 +3,7 @@ use std::io::Error;
 use std::path::PathBuf;
 use eframe::egui::TextBuffer;
 use markdown::message::Message;
-use markdown::{CompileOptions, Constructs, ParseOptions};
+use markdown::{CompileOptions, Constructs, Options, ParseOptions};
 use markdown::mdast::Node;
 use serde::Deserialize;
 use thiserror::Error;
@@ -54,7 +54,20 @@ pub fn render(source: PathBuf, root: PathBuf) -> Result<RenderOutput, RenderErro
 fn render_as_markdown(source: PathBuf, root: PathBuf) -> Result<String, RenderError> {
     let absolute_source = root.join(source.clone());
     let contents = fs::read_to_string(absolute_source.clone()).map_err(|e| RenderError::FileReadError(e, source.clone()))?;
-    let options = markdown::Options {
+    let options = markdown_options();
+    let html = markdown::to_html_with_options(contents.as_str(), &options).map_err(|e| RenderError::MarkdownParseError(e, source.clone()))?;
+    let ast = markdown::to_mdast(contents.as_str(), &options.parse).map_err(|e| RenderError::MarkdownParseError(e, source.clone()))?;
+
+    if let Some(frontmatter) = find_frontmatter(ast, source.clone())? {
+        frontmatter.apply_layout(html, root)
+    } else {
+        Ok(html)
+    }
+}
+
+// Construct the
+fn markdown_options() -> Options {
+    markdown::Options {
         parse: ParseOptions {
             constructs: Constructs {
                 frontmatter: true,
@@ -64,14 +77,6 @@ fn render_as_markdown(source: PathBuf, root: PathBuf) -> Result<String, RenderEr
             ..Default::default()
         },
         ..Default::default()
-    };
-    let html = markdown::to_html_with_options(contents.as_str(), &options).map_err(|e| RenderError::MarkdownParseError(e, source.clone()))?;
-    let ast = markdown::to_mdast(contents.as_str(), &options.parse).map_err(|e| RenderError::MarkdownParseError(e, source.clone()))?;
-
-    if let Some(frontmatter) = find_frontmatter(ast, source.clone())? {
-        frontmatter.apply_layout(html, root)
-    } else {
-        Ok(html)
     }
 }
 
