@@ -96,14 +96,27 @@ fn find_frontmatter(node: Node, source: PathBuf) -> Result<Option<Frontmatter>, 
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_rendering_markdown() {
+    fn render_index() -> RenderOutput {
         match render("index.md".into(), "./testdata".into()) {
-            Err(e) => println!("{}", e),
-            Ok(ro) => {
-                println!("File: {}", ro.filename.to_str().unwrap());
-                println!("Contents:\n\n{}", ro.contents);
+            Ok(ro) => ro,
+            Err(e) => {
+                println!("{}", e);
+                panic!();
             }
         }
+    }
+
+    #[test]
+    fn test_rendering_markdown() {
+        let RenderOutput { contents, filename } = render_index();
+        assert_eq!(filename.to_str(), Some("index.html")); // Goes to the right filename
+        assert!(contents.starts_with("<!DOCTYPE html>")); // Uses the layout
+        assert!(contents.matches("Pest Toast").next().is_some()); // Replaces in the title
+        assert!(contents.matches("<code class=\"language-rust\">").next().is_some()); // Renders the code snippet
+        assert!(contents.matches("<table>").next().is_some()); // Renders the table
+    }
+
+    #[test]
+    fn test_no_layout() {
     }
 }
