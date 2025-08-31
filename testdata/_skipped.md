@@ -1,0 +1,1 @@
+This file should be skipped entirely because it begins with an underscore

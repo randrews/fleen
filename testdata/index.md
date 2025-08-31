@@ -1,6 +1,7 @@
 +++
-layout = "layouts/post.html"
+layout = "_layouts/post.html"
 title = "Pest Toast"
+published = true
 +++
 Test
 ===
