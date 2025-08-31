@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::fs;
+use std::{fs, io};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
@@ -51,6 +51,7 @@ impl FleenApp {
                 if iter.next().is_some() {
                     Err(RootDirPopulated(root))
                 } else {
+                    Self::initialize_site(root.clone()).map_err(|e| FleenError::FileIo(String::from("creating site"), e.to_string()))?;
                     Ok(Self { root, files_cache: RefCell::new(None) })
                 }
             }
@@ -58,6 +59,16 @@ impl FleenApp {
                 Err(RootDirNonexistence(root))
             }
         }
+    }
+
+    fn initialize_site(root: PathBuf) -> Result<(), io::Error> {
+        fs::create_dir(root.join("_layouts"))?;
+        fs::create_dir(root.join("assets"))?;
+        fs::create_dir(root.join("images"))?;
+        fs::write(root.join("_layouts/default.html"), include_str!("../templates/default_layout.html"))?;
+        fs::write(root.join("assets/.keep"), "")?;
+        fs::write(root.join("images/.keep"), "")?;
+        Ok(())
     }
 
     // TODO: This is panicky as hell, make it return a Result
@@ -92,6 +103,12 @@ impl FleenApp {
     }
 
     pub fn open_filename(&self, filename: &str) -> Result<(), FleenError> {
+        // TODO this doesn't work for html files. We really want to open things in a platform-dependent way
+        // - md, html, all other text, should open in gedit on linux or the user's preferred editor on mac
+        // - images should open in an image viewer preferably
+        // - dirs should open in a file browser
+        // - on mac we can open -t to force a text editor
+        // - on linux we should maybe allow a FLEEN_EDITOR env var, defaulting to EDITOR if missing?
         Command::new("open").arg(filename).spawn().map_err(|err| {
             FleenError::FileIo(filename.to_owned(), err.to_string())
         })?;
@@ -108,8 +125,16 @@ impl FleenApp {
             return Err(FleenError::FileExists(target))
         }
 
+        let contents = if name.ends_with(".md") {
+            include_str!("../templates/markdown_template.md")
+        } else if name.ends_with(".html") {
+            include_str!("../templates/default_layout.html")
+        } else {
+            ""
+        };
+
         match file_type {
-            FileType::File => std::fs::write(target.clone(), []),
+            FileType::File => std::fs::write(target.clone(), contents),
             FileType::Dir => std::fs::create_dir(target.clone())
         }.map_err(|err| FleenError::FileCreate(target.clone(), err.to_string()))?;
 
