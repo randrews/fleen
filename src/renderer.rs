@@ -26,7 +26,7 @@ pub enum RenderOutput {
 pub struct Frontmatter {
     layout: Option<String>,
     title: Option<String>,
-    published: bool
+    published: Option<bool>
 }
 
 impl Frontmatter {
@@ -39,10 +39,10 @@ impl Frontmatter {
         } else {
             content
         };
-        if self.published {
-            Ok(RenderOutput::Rendered(filename.with_extension("html"), wrapped))
-        } else {
+        if let Some(false) = self.published {
             Ok(RenderOutput::Hidden(filename.with_extension("html"), wrapped))
+        } else {
+            Ok(RenderOutput::Rendered(filename.with_extension("html"), wrapped))
         }
     }
 }
@@ -55,6 +55,19 @@ pub enum RenderError {
     MarkdownParseError(Message, PathBuf),
     #[error("Error parsing frontmatter in {1}: {0}")]
     FrontmatterParseError(toml::de::Error, PathBuf)
+}
+
+/// Return the path for the default thing to render for the test server, which is either index.html
+/// (if it exists) or index.md. Note that this does not guarantee that the file actually exists, it
+/// just chooses that because those are the files which can become index.html in the output and
+/// index.html is what a reasonable webserver will pick as the default file.
+pub fn default_path(root: impl Into<PathBuf>) -> PathBuf {
+    let root: PathBuf = root.into();
+    if let Ok(true) = fs::exists(root.join("/index.html")) {
+        "index.html".into()
+    } else {
+        "index.md".into()
+    }
 }
 
 /// Take a source file path (relative to the root) and the root path, and return a RenderOutput for it
@@ -176,6 +189,9 @@ mod tests {
         let RenderOutput::Hidden(_, contents) = contents else { unreachable!() };
         assert!(contents.starts_with("<!DOCTYPE html>")); // Uses the layout
         assert!(contents.matches("This file should render to hidden").next().is_some());
+
+        let contents = render_file("not_hidden.md");
+        assert!(matches!(contents, RenderOutput::Rendered(_, _))); // If we don't specify, it's published by default
     }
 
     #[test]
