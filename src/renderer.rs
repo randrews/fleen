@@ -30,7 +30,7 @@ pub struct Frontmatter {
 }
 
 impl Frontmatter {
-    fn apply_layout(self, content: String, filename: PathBuf, root: PathBuf) -> Result<RenderOutput, RenderError> {
+    fn apply_layout(self, content: String, filename: PathBuf, root: &PathBuf) -> Result<RenderOutput, RenderError> {
         let title = self.title.unwrap_or(String::new());
         let wrapped = if let Some(layout) = self.layout {
             let absolute_layout = root.join(layout);
@@ -61,8 +61,7 @@ pub enum RenderError {
 /// (if it exists) or index.md. Note that this does not guarantee that the file actually exists, it
 /// just chooses that because those are the files which can become index.html in the output and
 /// index.html is what a reasonable webserver will pick as the default file.
-pub fn default_path(root: impl Into<PathBuf>) -> PathBuf {
-    let root: PathBuf = root.into();
+pub fn default_path(root: &PathBuf) -> PathBuf {
     if let Ok(true) = fs::exists(root.join("/index.html")) {
         "index.html".into()
     } else {
@@ -71,7 +70,7 @@ pub fn default_path(root: impl Into<PathBuf>) -> PathBuf {
 }
 
 /// Take a source file path (relative to the root) and the root path, and return a RenderOutput for it
-pub fn render(source: PathBuf, root: PathBuf) -> Result<RenderOutput, RenderError> {
+pub fn render(source: PathBuf, root: &PathBuf) -> Result<RenderOutput, RenderError> {
     if skipped_path(source.clone()) {
         return Ok(RenderOutput::NoOutput)
     }
@@ -97,7 +96,7 @@ fn skipped_path(source: PathBuf) -> bool {
 }
 
 // This gets called by `render` if the source path extension is md
-fn render_as_markdown(source: PathBuf, root: PathBuf) -> Result<RenderOutput, RenderError> {
+fn render_as_markdown(source: PathBuf, root: &PathBuf) -> Result<RenderOutput, RenderError> {
     let absolute_source = root.join(source.clone());
     let contents = fs::read_to_string(absolute_source.clone()).map_err(|e| RenderError::FileReadError(e, source.clone()))?;
     let options = markdown_options();
@@ -144,7 +143,7 @@ mod tests {
     use super::*;
 
     fn render_file(path: impl Into<PathBuf>) -> RenderOutput {
-        match render(path.into(), "./testdata".into()) {
+        match render(path.into(), &("./testdata".into())) {
             Ok(ro) => ro,
             Err(e) => {
                 println!("{}", e);

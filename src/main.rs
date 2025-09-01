@@ -1,13 +1,17 @@
 mod fleen_app;
 mod renderer;
+mod server;
 
 use std::path::{Path, PathBuf};
 use eframe::egui::{Color32, Context, Id, RichText};
 use eframe::{egui, Frame};
 use egui_ltreeview::Action;
+use tokio::task::JoinHandle;
 use crate::fleen_app::{FileType, FleenApp, FleenError, TreeEntry};
+use crate::server::start_server;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let native_options = eframe::NativeOptions::default();
     eframe::run_native("Fleen", native_options, Box::new(|_cc| {
         Ok(Box::new(FleenUi::default()))
@@ -25,7 +29,8 @@ struct FleenUi {
     app: Option<FleenApp>,
     error: Option<FleenError>,
     selected_file: Option<String>,
-    dialog_mode: Option<DialogMode>
+    dialog_mode: Option<DialogMode>,
+    server_handle: Option<JoinHandle<()>>
 }
 
 impl FleenUi {
@@ -34,15 +39,21 @@ impl FleenUi {
             ui.label("No site selected!");
 
             if ui.button("Open site...").clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
-                match FleenApp::open(path) {
-                    Ok(app) => { self.app = Some(app) }
+                match FleenApp::open(path.clone()) {
+                    Ok(app) => {
+                        self.app = Some(app);
+                        self.server_handle = Some(tokio::spawn(start_server(path)))
+                    }
                     Err(err) => { self.error = Some(err) }
                 }
             }
 
             if ui.button("New site...").clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
-                match FleenApp::create(path) {
-                    Ok(app) => { self.app = Some(app) }
+                match FleenApp::create(path.clone()) {
+                    Ok(app) => {
+                        self.app = Some(app);
+                        self.server_handle = Some(tokio::spawn(start_server(path)))
+                    }
                     Err(err) => { self.error = Some(err) }
                 }
             }
