@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::Uri;
@@ -9,24 +8,23 @@ use axum::Router;
 use axum::routing::get;
 use crate::renderer::{default_path, render, RenderOutput};
 
-pub async fn start_server(root: PathBuf) {
-    let state = Arc::new(root);
+pub async fn start_server(root: PathBuf, port: u32) {
     let app = Router::new()
-        .route("/", get(|State(root): State<Arc<PathBuf>>| async {
+        .route("/", get(|State(root): State<PathBuf>| async move {
+            // We need a separate route for the default path because {*p} must match at least one thing
             let path = default_path(&root);
-            serve_path(String::from(path.to_str().unwrap()), root)
+            serve_path(String::from(path.to_str().unwrap()), root.clone())
         }))
-        .route("/{*path}", get(|State(root): State<Arc<PathBuf>>, uri: Uri| async move {
-            serve_path(String::from(uri.path()), root)
+        .route("/{*path}", get(|State(root): State<PathBuf>, uri: Uri| async move {
+            serve_path(String::from(uri.path()), root.clone())
         }))
-        .with_state(state);
+        .with_state(root);
 
-    // run our app with hyper, listening globally on port 3000
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
-fn serve_path(path: String, root: impl AsRef<PathBuf>) -> impl IntoResponse {
+fn serve_path(path: String, root: PathBuf) -> impl IntoResponse {
     let path = path.strip_prefix("/").unwrap_or(path.as_str());
     let render = render(path.into(), root.as_ref());
 
@@ -44,6 +42,7 @@ fn serve_path(path: String, root: impl AsRef<PathBuf>) -> impl IntoResponse {
         }
         Ok(RenderOutput::NoOutput) |
         Ok(RenderOutput::Dir(_)) => {
+            // TODO a nicer 404 page?
             Response::builder()
                 .status(404)
                 .body(Body::from(include_str!("../templates/404.html"))).unwrap()

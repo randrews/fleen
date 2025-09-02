@@ -42,7 +42,7 @@ impl FleenUi {
                 match FleenApp::open(path.clone()) {
                     Ok(app) => {
                         self.app = Some(app);
-                        self.server_handle = Some(tokio::spawn(start_server(path)))
+                        self.server_handle = Some(tokio::spawn(start_server(path, 3000)))
                     }
                     Err(err) => { self.error = Some(err) }
                 }
@@ -52,7 +52,7 @@ impl FleenUi {
                 match FleenApp::create(path.clone()) {
                     Ok(app) => {
                         self.app = Some(app);
-                        self.server_handle = Some(tokio::spawn(start_server(path)))
+                        self.server_handle = Some(tokio::spawn(start_server(path, 3000)))
                     }
                     Err(err) => { self.error = Some(err) }
                 }

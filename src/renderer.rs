@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use markdown::message::Message;
 use markdown::{Constructs, Options, ParseOptions};
 use markdown::mdast::Node;
@@ -30,11 +30,11 @@ pub struct Frontmatter {
 }
 
 impl Frontmatter {
-    fn apply_layout(self, content: String, filename: PathBuf, root: &PathBuf) -> Result<RenderOutput, RenderError> {
-        let title = self.title.unwrap_or(String::new());
+    fn apply_layout(self, content: String, filename: PathBuf, root: &Path) -> Result<RenderOutput, RenderError> {
+        let title = self.title.unwrap_or_default();
         let wrapped = if let Some(layout) = self.layout {
             let absolute_layout = root.join(layout);
-            let layout = fs::read_to_string(absolute_layout.clone()).map_err(|e| RenderError::FileReadError(e, absolute_layout))?;
+            let layout = fs::read_to_string(absolute_layout.clone()).map_err(|e| RenderError::FileRead(e, absolute_layout))?;
             layout.replace("$title", title.as_str()).replace("$content", content.as_str())
         } else {
             content
@@ -50,19 +50,19 @@ impl Frontmatter {
 #[derive(Error, Debug)]
 pub enum RenderError {
     #[error("Error reading {1}: {0}")]
-    FileReadError(Error, PathBuf),
+    FileRead(Error, PathBuf),
     #[error("Error parsing Markdown {1}: {0}")]
-    MarkdownParseError(Message, PathBuf),
+    MarkdownParse(Message, PathBuf),
     #[error("Error parsing frontmatter in {1}: {0}")]
-    FrontmatterParseError(toml::de::Error, PathBuf)
+    FrontmatterParse(toml::de::Error, PathBuf)
 }
 
 /// Return the path for the default thing to render for the test server, which is either index.html
 /// (if it exists) or index.md. Note that this does not guarantee that the file actually exists, it
 /// just chooses that because those are the files which can become index.html in the output and
 /// index.html is what a reasonable webserver will pick as the default file.
-pub fn default_path(root: &PathBuf) -> PathBuf {
-    if let Ok(true) = fs::exists(root.join("/index.html")) {
+pub fn default_path(root: &Path) -> PathBuf {
+    if let Ok(true) = fs::exists(root.join("index.html")) {
         "index.html".into()
     } else {
         "index.md".into()
@@ -70,7 +70,7 @@ pub fn default_path(root: &PathBuf) -> PathBuf {
 }
 
 /// Take a source file path (relative to the root) and the root path, and return a RenderOutput for it
-pub fn render(source: PathBuf, root: &PathBuf) -> Result<RenderOutput, RenderError> {
+pub fn render(source: PathBuf, root: &Path) -> Result<RenderOutput, RenderError> {
     let extension = source.extension().map(|o| o.to_str().unwrap());
     if skipped_path(source.clone()) {
         // Skipped path, nothing
@@ -99,7 +99,7 @@ pub fn render(source: PathBuf, root: &PathBuf) -> Result<RenderOutput, RenderErr
 // If any element of the path starts with an underscore, we want to skip rendering it.
 // In addition, if a cheeky person has put .. in the path, just skip it (which will trigger a 404 from the dev server)
 fn skipped_path(source: PathBuf) -> bool {
-    source.into_iter().any(|el| {
+    source.iter().any(|el| {
         match el.to_str() {
             Some("..") => true,
             Some(s) if s.starts_with("_") => true,
@@ -109,12 +109,12 @@ fn skipped_path(source: PathBuf) -> bool {
 }
 
 // This gets called by `render` if the source path extension is md
-fn render_as_markdown(source: PathBuf, root: &PathBuf) -> Result<RenderOutput, RenderError> {
+fn render_as_markdown(source: PathBuf, root: &Path) -> Result<RenderOutput, RenderError> {
     let absolute_source = root.join(source.clone());
-    let contents = fs::read_to_string(absolute_source.clone()).map_err(|e| RenderError::FileReadError(e, source.clone()))?;
+    let contents = fs::read_to_string(absolute_source.clone()).map_err(|e| RenderError::FileRead(e, source.clone()))?;
     let options = markdown_options();
-    let html = markdown::to_html_with_options(contents.as_str(), &options).map_err(|e| RenderError::MarkdownParseError(e, source.clone()))?;
-    let ast = markdown::to_mdast(contents.as_str(), &options.parse).map_err(|e| RenderError::MarkdownParseError(e, source.clone()))?;
+    let html = markdown::to_html_with_options(contents.as_str(), &options).map_err(|e| RenderError::MarkdownParse(e, source.clone()))?;
+    let ast = markdown::to_mdast(contents.as_str(), &options.parse).map_err(|e| RenderError::MarkdownParse(e, source.clone()))?;
 
     if let Some(frontmatter) = find_frontmatter(ast, source.clone())? {
         frontmatter.apply_layout(html, source, root)
@@ -141,9 +141,9 @@ fn markdown_options() -> Options {
 // Look for and try to parse toml frontmatter
 fn find_frontmatter(node: Node, source: PathBuf) -> Result<Option<Frontmatter>, RenderError> {
     if let Some(children) = node.children() {
-        for child in children.into_iter() {
+        for child in children.iter() {
             if let Node::Toml(toml_str) = child {
-                let fmatter: Frontmatter = toml::from_str(toml_str.value.as_str()).map_err(|e| RenderError::FrontmatterParseError(e, source))?;
+                let fmatter: Frontmatter = toml::from_str(toml_str.value.as_str()).map_err(|e| RenderError::FrontmatterParse(e, source))?;
                 return Ok(Some(fmatter))
             }
         }
@@ -156,7 +156,7 @@ mod tests {
     use super::*;
 
     fn render_file(path: impl Into<PathBuf>) -> RenderOutput {
-        match render(path.into(), &("./testdata".into())) {
+        match render(path.into(), Path::new("./testdata")) {
             Ok(ro) => ro,
             Err(e) => {
                 println!("{}", e);
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn test_raw() {
         let contents = render_file("raw.txt");
-        assert_eq!(contents, RenderOutput::RawFile(PathBuf::from("raw.txt")));
+        assert_eq!(contents, RenderOutput::RawFile(PathBuf::from("./testdata/raw.txt")));
     }
 
     #[test]
