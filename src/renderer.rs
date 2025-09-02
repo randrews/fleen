@@ -71,15 +71,28 @@ pub fn default_path(root: &PathBuf) -> PathBuf {
 
 /// Take a source file path (relative to the root) and the root path, and return a RenderOutput for it
 pub fn render(source: PathBuf, root: &PathBuf) -> Result<RenderOutput, RenderError> {
+    let extension = source.extension().map(|o| o.to_str().unwrap());
     if skipped_path(source.clone()) {
-        return Ok(RenderOutput::NoOutput)
-    }
-    if root.join(source.clone()).is_dir() {
-        return Ok(RenderOutput::Dir(source))
-    }
-    match source.extension().map(|o| o.to_str().unwrap()) {
-        Some("md") => render_as_markdown(source.clone(), root),
-        _ => Ok(RenderOutput::RawFile(source))
+        // Skipped path, nothing
+        Ok(RenderOutput::NoOutput)
+    } else if root.join(source.clone()).is_dir() {
+        // Dir, which matters for producing files
+        Ok(RenderOutput::Dir(source))
+    } else if let Ok(true) = fs::exists(root.join(source.clone())) {
+        match extension {
+            // Asked for a markdown file, render it
+            // TODO this is a little silly for the server, this should properly be NoOutput but that's a big change
+            Some("md") => render_as_markdown(source.clone(), root),
+            // Not a markdown file, but it exists, return it raw
+            _ => Ok(RenderOutput::RawFile(root.join(source)))
+        }
+    } else if matches!(extension, Some("html")) &&
+        let Ok(true) = fs::exists(root.join(source.with_extension("md"))) {
+        // We asked for an html file which doesn't exist but a corresponding md file does, render it
+        render_as_markdown(source.with_extension("md"), root)
+    } else {
+        // Asked for something which doesn't exist and it's not the md -> html case, 404:
+        Ok(RenderOutput::NoOutput)
     }
 }
 
@@ -207,5 +220,11 @@ mod tests {
     #[test]
     fn test_dir() {
         assert!(matches!(render_file("dir"), RenderOutput::Dir(_)));
+    }
+
+    #[test]
+    fn test_ask_for_html() {
+        let contents = render_file("index.html");
+        assert!(matches!(contents, RenderOutput::Rendered(_, _))) // We asked for the html file which doesn't exist but the md does
     }
 }
