@@ -227,4 +227,13 @@ mod tests {
         let contents = render_file("index.html");
         assert!(matches!(contents, RenderOutput::Rendered(_, _))) // We asked for the html file which doesn't exist but the md does
     }
+
+    #[test]
+    fn test_default_path() {
+        // index.html doesn't exist so we default to index.md, which will become index.html
+        assert_eq!(default_path(Path::new("./testdata")), PathBuf::from("index.md"));
+
+        // index.html exists so we default to it, rather than render something
+        assert_eq!(default_path(Path::new("./testdata/with_index")), PathBuf::from("index.html"))
+    }
 }
