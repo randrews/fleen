@@ -116,7 +116,8 @@ impl FleenApp {
     }
 
     pub fn open_server(&self, port: &str) {
-        Command::new("open").arg(format!("http://localhost:{}", port)).spawn();
+        // If this doesn't work, not like I can do much about it.
+        let _ = Command::new("open").arg(format!("http://localhost:{}", port)).spawn();
     }
 
     pub fn create_page(&self, file_type: FileType, name: &str, parent: Option<&String>) -> Result<(), FleenError> {
