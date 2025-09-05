@@ -54,9 +54,7 @@ impl FleenUi {
             let title = egui::Label::new(RichText::new("Select a site to manage").size(20.0));
             ui.vertical_centered(|ui| ui.add(title));
 
-            let open_btn = Button::new("Open site...");
-            let new_btn = Button::new("New site...");
-            if ui.add_fill_width(open_btn).clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
+            if ui.add_fill_width(Button::blue("Open site...")).clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
                 match FleenApp::open(path.clone()) {
                     Ok(app) => {
                         self.app = Some(app);
@@ -65,7 +63,7 @@ impl FleenUi {
                 }
             }
 
-            if ui.add_fill_width(new_btn).clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
+            if ui.add_fill_width(Button::green("New site...")).clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
                 match FleenApp::create(path.clone()) {
                     Ok(app) => {
                         self.app = Some(app);
@@ -159,6 +157,11 @@ impl FleenUi {
             }
         }
 
+        ui.add_enabled_ui(self.app.as_ref().unwrap().image_dir_exists(), |ui| {
+            if ui.add_fill_width(Button::blue("Image from clipboard")).clicked() {
+
+            }
+        });
         just_clicked
     }
 

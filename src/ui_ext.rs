@@ -22,6 +22,7 @@ impl UiExtensions for Ui {
 pub trait ButtonExtensions<'a> {
     fn red(atoms: impl IntoAtoms<'a>) -> Self;
     fn green(text: impl Into<String>) -> Self;
+    fn blue(text: impl Into<String>) -> Self;
 }
 
 impl<'a> ButtonExtensions<'a> for Button<'a> {
@@ -31,5 +32,9 @@ impl<'a> ButtonExtensions<'a> for Button<'a> {
 
     fn green(text: impl Into<String>) -> Self {
         Self::new(RichText::new(text).color(Color32::WHITE)).fill(Color32::DARK_GREEN)
+    }
+
+    fn blue(text: impl Into<String>) -> Self {
+        Self::new(RichText::new(text).color(Color32::WHITE)).fill(Color32::DARK_BLUE)
     }
 }

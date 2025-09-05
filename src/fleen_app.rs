@@ -125,6 +125,10 @@ impl FleenApp {
             Some(s) => PathBuf::from(s),
             None => self.root.clone()
         };
+        if matches!(file_type, FileType::Dir) {
+            while target.is_file() { target.pop(); }
+        }
+
         target.push(name);
         if target.exists() {
             return Err(FleenError::FileExists(target))
@@ -139,8 +143,8 @@ impl FleenApp {
         };
 
         match file_type {
-            FileType::File => std::fs::write(target.clone(), contents),
-            FileType::Dir => std::fs::create_dir(target.clone())
+            FileType::File => fs::write(target.clone(), contents),
+            FileType::Dir => fs::create_dir(target.clone())
         }.map_err(|err| FleenError::FileCreate(target.clone(), err.to_string()))?;
 
         self.refresh_file_cache(true);
@@ -172,5 +176,9 @@ impl FleenApp {
 
     pub fn root_path(&self) -> String {
         self.root.to_string_lossy().to_string()
+    }
+
+    pub fn image_dir_exists(&self) -> bool {
+        self.root.join("images").is_dir()
     }
 }
