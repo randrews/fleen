@@ -115,6 +115,10 @@ impl FleenApp {
         Ok(())
     }
 
+    pub fn open_server(&self, port: &str) {
+        Command::new("open").arg(format!("http://localhost:{}", port)).spawn();
+    }
+
     pub fn create_page(&self, file_type: FileType, name: &str, parent: Option<&String>) -> Result<(), FleenError> {
         let mut target = match parent {
             Some(s) => PathBuf::from(s),

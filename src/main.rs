@@ -1,14 +1,16 @@
 mod fleen_app;
 mod renderer;
 mod server;
+mod ui_ext;
 
 use std::path::{Path, PathBuf};
-use eframe::egui::{Color32, Context, Id, RichText};
+use eframe::egui::{Align, Button, Color32, Context, Id, Layout, RichText};
 use eframe::{egui, Frame};
 use egui_ltreeview::Action;
 use tokio::task::JoinHandle;
 use crate::fleen_app::{FileType, FleenApp, FleenError, TreeEntry};
 use crate::server::start_server;
+use crate::ui_ext::UiExtensions;
 
 #[tokio::main]
 async fn main() {
@@ -24,31 +26,46 @@ enum DialogMode {
     RenameFile(String)
 }
 
-#[derive(Default)]
 struct FleenUi {
     app: Option<FleenApp>,
     error: Option<FleenError>,
     selected_file: Option<String>,
     dialog_mode: Option<DialogMode>,
-    server_handle: Option<JoinHandle<()>>
+    server_handle: Option<JoinHandle<()>>,
+    server_port: String
+}
+
+impl Default for FleenUi {
+    fn default() -> Self {
+        Self {
+            app: None,
+            error: None,
+            selected_file: None,
+            dialog_mode: None,
+            server_handle: None,
+            server_port: "3000".to_string(),
+        }
+    }
 }
 
 impl FleenUi {
     fn site_chooser(&mut self, ctx: &Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.label("No site selected!");
+            let title = egui::Label::new(RichText::new("Select a site to manage").size(20.0));
+            ui.vertical_centered(|ui| ui.add(title));
 
-            if ui.button("Open site...").clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
+            let open_btn = Button::new("Open site...");
+            let new_btn = Button::new("New site...");
+            if ui.fill_button(open_btn).clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
                 match FleenApp::open(path.clone()) {
                     Ok(app) => {
                         self.app = Some(app);
-                        self.server_handle = Some(tokio::spawn(start_server(path, 3000)))
                     }
                     Err(err) => { self.error = Some(err) }
                 }
             }
 
-            if ui.button("New site...").clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
+            if ui.fill_button(new_btn).clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
                 match FleenApp::create(path.clone()) {
                     Ok(app) => {
                         self.app = Some(app);
@@ -65,35 +82,13 @@ impl FleenUi {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.vertical(|ui| {
+                let width = ui.available_width() / 3.0;
+                ui.column(width, |ui| {
                     self.tree_view(ui);
-                    if ui.add(egui::Button::new("Open")).clicked() &&
-                        let Some(fname) = &self.selected_file {
-                            self.handle_error(self.app.as_ref().unwrap().open_filename(fname))
-                    }
-
-                    let new_btn = egui::Button::new(RichText::new("New page").color(Color32::WHITE)).fill(Color32::DARK_GREEN);
-                    if ui.add(new_btn).clicked() {
-                        just_clicked = true;
-                        self.dialog_mode = Some(DialogMode::NewFile(String::new()));
-                    }
-
-                    let rename_btn = egui::Button::new("Rename");
-                    let delete_btn = egui::Button::new("Delete").fill(Color32::DARK_RED);
-                    if self.root_selected() || self.selected_file.is_none() {
-                        ui.add_enabled(false, rename_btn);
-                        ui.add_enabled(false, delete_btn);
-                    } else if let Some(selected) = &self.selected_file {
-                        if ui.add(rename_btn).clicked() {
-                            self.dialog_mode = Some(DialogMode::RenameFile(label_for_path(&PathBuf::from(&selected))));
-                            just_clicked = true;
-                        }
-                        if ui.add(delete_btn).clicked() {
-                            self.dialog_mode = Some(DialogMode::ConfirmDelete(selected.clone()));
-                        }
-                    }
+                    just_clicked = self.tree_buttons(ui);
                 });
-            })
+                ui.column(width, |ui| self.server_controls(ui));
+            });
         });
 
         match self.dialog_mode {
@@ -131,6 +126,72 @@ impl FleenUi {
                 _ => {}
             }
         }
+    }
+
+    fn tree_buttons(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut just_clicked = false;
+
+        if ui.fill_button(egui::Button::new("Open")).clicked() &&
+            let Some(fname) = &self.selected_file {
+            self.handle_error(self.app.as_ref().unwrap().open_filename(fname))
+        }
+
+        let new_btn = egui::Button::new(RichText::new("New page").color(Color32::WHITE)).fill(Color32::DARK_GREEN);
+        if ui.fill_button(new_btn).clicked() {
+            just_clicked = true;
+            self.dialog_mode = Some(DialogMode::NewFile(String::new()));
+        }
+
+        let rename_btn = egui::Button::new("Rename");
+        let delete_btn = egui::Button::new("Delete").fill(Color32::DARK_RED);
+        if self.root_selected() || self.selected_file.is_none() {
+            ui.add_enabled_ui(false, |ui| {
+                ui.fill_button(rename_btn);
+                ui.fill_button(delete_btn);
+            });
+        } else if let Some(selected) = &self.selected_file {
+            if ui.fill_button(rename_btn).clicked() {
+                self.dialog_mode = Some(DialogMode::RenameFile(label_for_path(&PathBuf::from(&selected))));
+                just_clicked = true;
+            }
+            if ui.fill_button(delete_btn).clicked() {
+                self.dialog_mode = Some(DialogMode::ConfirmDelete(selected.clone()));
+            }
+        }
+
+        just_clicked
+    }
+
+    fn server_controls(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.label("Port");
+            let open_button = Button::new(format!("Open http://localhost:{}", self.server_port));
+            let port_editor = egui::TextEdit::singleline(&mut self.server_port);
+
+            if let Some(join_handle) = &self.server_handle {
+                ui.add_enabled_ui(false, |ui| ui.fill_button(port_editor));
+                let stop_btn = egui::Button::new("Stop server").fill(Color32::DARK_RED);
+                if ui.fill_button(stop_btn).clicked() {
+                    join_handle.abort();
+                    self.server_handle = None;
+                }
+                if ui.fill_button(open_button).clicked() {
+                    self.app.as_ref().unwrap().open_server(self.server_port.as_str());
+                }
+            } else {
+                ui.add(port_editor);
+                let start_btn = Button::new(RichText::new("Start server").color(Color32::WHITE)).fill(Color32::DARK_GREEN);
+                if let Ok(port_num) = self.server_port.parse::<u32>() {
+                    if ui.fill_button(start_btn).clicked() {
+                        let path = PathBuf::from(self.app.as_ref().unwrap().root_path());
+                        self.server_handle = Some(tokio::spawn(start_server(path, port_num)))
+                    }
+                } else {
+                    ui.add_enabled_ui(false, |ui| ui.fill_button(start_btn));
+                }
+                ui.add_enabled_ui(false, |ui| ui.fill_button(open_button));
+            }
+        });
     }
 
     fn new_file_dialog(&mut self, ctx: &Context, just_clicked: bool) {
