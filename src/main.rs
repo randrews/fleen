@@ -4,6 +4,7 @@ mod server;
 mod ui_ext;
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use eframe::egui::{Button, Context, Id, RichText};
 use eframe::{egui, Frame};
 use egui_ltreeview::Action;
@@ -26,13 +27,19 @@ enum DialogMode {
     RenameFile(String)
 }
 
+struct TempMessage {
+    created: Instant,
+    message: String
+}
+
 struct FleenUi {
     app: Option<FleenApp>,
     error: Option<FleenError>,
     selected_file: Option<String>,
     dialog_mode: Option<DialogMode>,
     server_handle: Option<JoinHandle<()>>,
-    server_port: String
+    server_port: String,
+    image_message: Option<TempMessage>
 }
 
 impl Default for FleenUi {
@@ -43,6 +50,7 @@ impl Default for FleenUi {
             selected_file: None,
             dialog_mode: None,
             server_handle: None,
+            image_message: None,
             server_port: "3000".to_string(),
         }
     }
@@ -157,9 +165,17 @@ impl FleenUi {
             }
         }
 
-        ui.add_enabled_ui(self.app.as_ref().unwrap().image_dir_exists(), |ui| {
-            if ui.add_fill_width(Button::blue("Image from clipboard")).clicked() {
+        ui.add_enabled_ui(self.app.as_ref().unwrap().image_dir_exists() && self.image_message.is_none(), |ui| {
+            let label = match &self.image_message {
+                Some(TempMessage { message, .. }) => message.as_str(),
+                _ => "Image from clipboard"
+            };
 
+            if ui.add_fill_width(Button::blue(label)).clicked() {
+                self.image_message = match self.app.as_ref().unwrap().paste_image() {
+                    Ok(message) => Some(TempMessage { message, created: Instant::now() }),
+                    Err(e) => Some(TempMessage { message: e.to_string(), created: Instant::now() })
+                }
             }
         });
         just_clicked
@@ -322,6 +338,11 @@ impl eframe::App for FleenUi {
                     self.error = None
                 }
             });
+        }
+
+        if let Some(TempMessage { created, .. }) = &self.image_message
+            && *created < Instant::now() - Duration::from_secs(2) {
+            self.image_message = None
         }
     }
 }

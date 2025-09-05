@@ -2,7 +2,10 @@ use std::cell::RefCell;
 use std::{fs, io};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use clipboard_rs::Clipboard;
+use clipboard_rs::common::RustImage;
 use thiserror::Error;
+use tinyrand::Rand;
 use crate::fleen_app::FleenError::{RootDirNonexistence, RootDirPopulated};
 use crate::fleen_app::TreeEntry::{CloseDir, Dir};
 
@@ -17,7 +20,11 @@ pub enum FleenError {
     #[error("Can't create {0} because it already exists")]
     FileExists(PathBuf),
     #[error("Can't create {0}: {1}")]
-    FileCreate(PathBuf, String)
+    FileCreate(PathBuf, String),
+    #[error("Image dir doesn't exist")]
+    NoImageDir,
+    #[error("No image on clipboard")]
+    NoClipboardImage
 }
 
 #[derive(Clone, Debug)]
@@ -180,5 +187,38 @@ impl FleenApp {
 
     pub fn image_dir_exists(&self) -> bool {
         self.root.join("images").is_dir()
+    }
+
+    pub fn unique_image_name(&self) -> Result<PathBuf, FleenError> {
+        if !self.image_dir_exists() { return Err(FleenError::NoImageDir) }
+        let mut rng = tinyrand::StdRand::default();
+        loop {
+            let fname = format!("image_{}.png", Self::random_name(&mut rng));
+            let path = self.root.join("images").join(fname);
+            if !path.exists() {
+                return Ok(path)
+            }
+        }
+    }
+
+    fn random_name(rng: &mut tinyrand::StdRand) -> String {
+        let mut s = String::new();
+        let chs = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
+        for _ in 0..8 {
+            let n = rng.next_lim_usize(chs.len());
+            s.push(chs[n]);
+        }
+        s
+    }
+
+    pub fn paste_image(&self) -> Result<String, FleenError> {
+        let c = clipboard_rs::ClipboardContext::new().map_err(|_| FleenError::NoClipboardImage)?;
+        let img = c.get_image().map_err(|_| FleenError::NoClipboardImage)?;
+        let target_path = self.unique_image_name()?;
+        img.save_to_path(target_path.to_str().unwrap()).map_err(|e| FleenError::FileCreate(target_path.clone(), e.to_string()))?;
+        self.refresh_file_cache(true);
+        let uri = format!("/images/{}", target_path.file_name().unwrap().to_str().unwrap());
+        let _ = c.set_text(format!("![]({})", uri));
+        Ok("Image saved!".to_string())
     }
 }
