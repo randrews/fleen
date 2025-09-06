@@ -6,14 +6,13 @@ use axum::http::Uri;
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use axum::routing::get;
-use crate::renderer::{default_path, render, RenderOutput};
+use crate::renderer::{server_render, RenderOutput};
 
 pub async fn start_server(root: PathBuf, port: u32) {
     let app = Router::new()
         .route("/", get(|State(root): State<PathBuf>| async move {
             // We need a separate route for the default path because {*p} must match at least one thing
-            let path = default_path(&root);
-            serve_path(String::from(path.to_str().unwrap()), root.clone())
+            serve_path("index.html".to_string(), root.clone())
         }))
         .route("/{*path}", get(|State(root): State<PathBuf>, uri: Uri| async move {
             serve_path(String::from(uri.path()), root.clone())
@@ -26,7 +25,7 @@ pub async fn start_server(root: PathBuf, port: u32) {
 
 fn serve_path(path: String, root: PathBuf) -> impl IntoResponse {
     let path = path.strip_prefix("/").unwrap_or(path.as_str());
-    let render = render(path.into(), root.as_ref());
+    let render = server_render(path.into(), root.as_ref());
 
     match render {
         Ok(RenderOutput::Rendered(_, content)) |
@@ -38,7 +37,7 @@ fn serve_path(path: String, root: PathBuf) -> impl IntoResponse {
         Ok(RenderOutput::RawFile(file)) => {
             Response::builder()
                 .status(200)
-                .body(Body::from(fs::read(file).unwrap_or(vec![]))).unwrap()
+                .body(Body::from(fs::read(root.join(file)).unwrap_or(vec![]))).unwrap()
         }
         Ok(RenderOutput::NoOutput) |
         Ok(RenderOutput::Dir(_)) => {

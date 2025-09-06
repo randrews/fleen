@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, io};
 use std::io::Error;
 use std::path::{Path, PathBuf};
 use markdown::message::Message;
@@ -6,6 +6,7 @@ use markdown::{Constructs, Options, ParseOptions};
 use markdown::mdast::Node;
 use serde::Deserialize;
 use thiserror::Error;
+use crate::fleen_app::FleenError;
 
 /// The things we might return from trying to render a file
 #[derive(Clone, PartialEq, Debug)]
@@ -14,12 +15,30 @@ pub enum RenderOutput {
     Rendered(PathBuf, String),
     /// Hidden output should be returned by the test server but not rendered to a file
     Hidden(PathBuf, String),
-    /// The raw contents of the path
+    /// The raw contents of the given (relative) path.
     RawFile(PathBuf),
     /// No contents; this file should not be output / test server should return 404
     NoOutput,
     /// This is a directory; the test server won't return anything but we need to mkdir it
     Dir(PathBuf)
+}
+
+impl RenderOutput {
+    pub fn file_operation(&self, root: &Path, target: &Path) -> Result<(), io::Error> {
+        match self {
+            RenderOutput::Rendered(path, contents) => {
+                fs::write(target.join(path), contents)
+            }
+            RenderOutput::Hidden(_, _) | RenderOutput::NoOutput => Ok(()), // Don't do anything!
+            RenderOutput::RawFile(path) => {
+                fs::copy(root.join(path), target.join(path))?;
+                Ok(())
+            }
+            RenderOutput::Dir(path) => {
+                fs::create_dir(target.join(path))
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -57,20 +76,34 @@ pub enum RenderError {
     FrontmatterParse(toml::de::Error, PathBuf)
 }
 
-/// Return the path for the default thing to render for the test server, which is either index.html
-/// (if it exists) or index.md. Note that this does not guarantee that the file actually exists, it
-/// just chooses that because those are the files which can become index.html in the output and
-/// index.html is what a reasonable webserver will pick as the default file.
-pub fn default_path(root: &Path) -> PathBuf {
-    if let Ok(true) = fs::exists(root.join("index.html")) {
-        "index.html".into()
+/// Take a source file path (relative to the root) and the root path, and return a RenderOutput for it.
+/// This function is called for server output, which has different rules from file output.
+pub fn server_render(source: PathBuf, root: &Path) -> Result<RenderOutput, RenderError> {
+    let extension = source.extension().map(|o| o.to_str().unwrap());
+    if skipped_path(source.clone()) {
+        // Skipped path, nothing
+        Ok(RenderOutput::NoOutput)
+    } else if root.join(source.clone()).is_dir() {
+        // Dir, which matters for producing files
+        Ok(RenderOutput::Dir(source))
+    } else if let Ok(true) = fs::exists(root.join(source.clone())) {
+        match extension {
+            // Asked for a markdown file, but those become html, and we should request it as html:
+            Some("md") => Ok(RenderOutput::NoOutput),
+            // Not a markdown file, but it exists, return it raw
+            _ => Ok(RenderOutput::RawFile(source))
+        }
+    } else if matches!(extension, Some("html")) &&
+        let Ok(true) = fs::exists(root.join(source.with_extension("md"))) {
+        // We asked for an html file which doesn't exist but a corresponding md file does, render it
+        render_as_markdown(source.with_extension("md"), root)
     } else {
-        "index.md".into()
+        // Asked for something which doesn't exist and it's not the md -> html case, 404:
+        Ok(RenderOutput::NoOutput)
     }
 }
 
-/// Take a source file path (relative to the root) and the root path, and return a RenderOutput for it
-pub fn render(source: PathBuf, root: &Path) -> Result<RenderOutput, RenderError> {
+pub fn file_render(source: PathBuf, root: &Path) -> Result<RenderOutput, RenderError> {
     let extension = source.extension().map(|o| o.to_str().unwrap());
     if skipped_path(source.clone()) {
         // Skipped path, nothing
@@ -81,17 +114,12 @@ pub fn render(source: PathBuf, root: &Path) -> Result<RenderOutput, RenderError>
     } else if let Ok(true) = fs::exists(root.join(source.clone())) {
         match extension {
             // Asked for a markdown file, render it
-            // TODO this is a little silly for the server, this should properly be NoOutput but that's a big change
             Some("md") => render_as_markdown(source.clone(), root),
             // Not a markdown file, but it exists, return it raw
-            _ => Ok(RenderOutput::RawFile(root.join(source)))
+            _ => Ok(RenderOutput::RawFile(source))
         }
-    } else if matches!(extension, Some("html")) &&
-        let Ok(true) = fs::exists(root.join(source.with_extension("md"))) {
-        // We asked for an html file which doesn't exist but a corresponding md file does, render it
-        render_as_markdown(source.with_extension("md"), root)
     } else {
-        // Asked for something which doesn't exist and it's not the md -> html case, 404:
+        // Asked for something which doesn't exist:
         Ok(RenderOutput::NoOutput)
     }
 }
@@ -156,7 +184,7 @@ mod tests {
     use super::*;
 
     fn render_file(path: impl Into<PathBuf>) -> RenderOutput {
-        match render(path.into(), Path::new("./testdata")) {
+        match server_render(path.into(), Path::new("./testdata")) {
             Ok(ro) => ro,
             Err(e) => {
                 println!("{}", e);
@@ -167,7 +195,7 @@ mod tests {
 
     #[test]
     fn test_rendering_markdown() {
-        let contents = render_file("index.md");
+        let contents = render_file("index.html");
         assert!(matches!(contents, RenderOutput::Rendered(_, _)));
         let RenderOutput::Rendered(filename, contents) = contents else { unreachable!() };
         assert_eq!(filename.to_str(), Some("index.html")); // Goes to the right filename
@@ -179,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_no_layout() {
-        let contents = render_file("nolayout.md");
+        let contents = render_file("nolayout.html");
         assert!(matches!(contents, RenderOutput::Rendered(_, _))); // Normal output
         let RenderOutput::Rendered(_, contents) = contents else { unreachable!() };
         assert!(contents.starts_with("<p>This file has no layout")) // Doesn't use any layout, just the contents
@@ -187,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_no_output() {
-        let contents = render_file("_skipped.md");
+        let contents = render_file("_skipped.html");
         assert!(matches!(contents, RenderOutput::NoOutput)); // This begins with an underscore so it's skipped
 
         let contents = render_file("_layouts/post.html");
@@ -196,20 +224,20 @@ mod tests {
 
     #[test]
     fn test_hidden() {
-        let contents = render_file("hidden.md");
+        let contents = render_file("hidden.html");
         assert!(matches!(contents, RenderOutput::Hidden(_, _))); // The dev server should return it but it shouldn't produce a file
         let RenderOutput::Hidden(_, contents) = contents else { unreachable!() };
         assert!(contents.starts_with("<!DOCTYPE html>")); // Uses the layout
         assert!(contents.matches("This file should render to hidden").next().is_some());
 
-        let contents = render_file("not_hidden.md");
+        let contents = render_file("not_hidden.html");
         assert!(matches!(contents, RenderOutput::Rendered(_, _))); // If we don't specify, it's published by default
     }
 
     #[test]
     fn test_raw() {
         let contents = render_file("raw.txt");
-        assert_eq!(contents, RenderOutput::RawFile(PathBuf::from("./testdata/raw.txt")));
+        assert_eq!(contents, RenderOutput::RawFile(PathBuf::from("raw.txt")));
     }
 
     #[test]
@@ -226,14 +254,5 @@ mod tests {
     fn test_ask_for_html() {
         let contents = render_file("index.html");
         assert!(matches!(contents, RenderOutput::Rendered(_, _))) // We asked for the html file which doesn't exist but the md does
-    }
-
-    #[test]
-    fn test_default_path() {
-        // index.html doesn't exist so we default to index.md, which will become index.html
-        assert_eq!(default_path(Path::new("./testdata")), PathBuf::from("index.md"));
-
-        // index.html exists so we default to it, rather than render something
-        assert_eq!(default_path(Path::new("./testdata/with_index")), PathBuf::from("index.html"))
     }
 }

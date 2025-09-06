@@ -1,15 +1,17 @@
 use std::cell::RefCell;
-use std::{fs, io};
+use std::{fs, io, time};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use clipboard_rs::Clipboard;
 use clipboard_rs::common::RustImage;
 use thiserror::Error;
-use tinyrand::Rand;
-use crate::fleen_app::FleenError::{RootDirNonexistence, RootDirPopulated};
+use tinyrand::{Rand, Seeded};
+use crate::fleen_app::FleenError::{RootDirNonexistence, RootDirPopulated, TargetDir};
 use crate::fleen_app::TreeEntry::{CloseDir, Dir};
+use crate::renderer;
+use crate::renderer::{RenderError, RenderOutput};
 
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug)]
 pub enum FleenError {
     #[error("Can't reach root dir {0}")]
     RootDirNonexistence(PathBuf),
@@ -24,7 +26,13 @@ pub enum FleenError {
     #[error("Image dir doesn't exist")]
     NoImageDir,
     #[error("No image on clipboard")]
-    NoClipboardImage
+    NoClipboardImage,
+    #[error("Render error: {0}")]
+    RenderError(#[from] RenderError),
+    #[error("Target dir is invalid (can't contain the app dir or vice versa)")]
+    TargetDir,
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error)
 }
 
 #[derive(Clone, Debug)]
@@ -191,7 +199,7 @@ impl FleenApp {
 
     pub fn unique_image_name(&self) -> Result<PathBuf, FleenError> {
         if !self.image_dir_exists() { return Err(FleenError::NoImageDir) }
-        let mut rng = tinyrand::StdRand::default();
+        let mut rng = tinyrand::StdRand::seed(time::SystemTime::now().duration_since(time::UNIX_EPOCH).unwrap().as_secs());
         loop {
             let fname = format!("image_{}.png", Self::random_name(&mut rng));
             let path = self.root.join("images").join(fname);
@@ -220,5 +228,113 @@ impl FleenApp {
         let uri = format!("/images/{}", target_path.file_name().unwrap().to_str().unwrap());
         let _ = c.set_text(format!("![]({})", uri));
         Ok("Image saved!".to_string())
+    }
+
+    pub fn compile(&self) -> Result<Vec<RenderOutput>, FleenError> {
+        let mut sources = vec![]; // The list of renderoutputs we need to perform
+
+        // Traverse a directory
+        fn visit_dir(dir: &Path, root: &Path, sources: &mut Vec<RenderOutput>) -> Result<(), RenderError> {
+            // Root is the app root. Dir is the directory path within the app root, like "assets".
+            // File is the filename (or child dir name) within the dir, so, root+dir+file is an
+            // absolute path
+            for entry in root.join(dir).read_dir().unwrap() {
+                let file = PathBuf::from(entry.unwrap().file_name());
+                sources.push(renderer::file_render(dir.join(&file), root)?);
+                if root.join(&dir).join(&file).is_dir() {
+                    // root + dir + file is a child directory, so we want to recurse...
+                    // into dir + file.
+                    visit_dir(&dir.join(&file), root, sources)?
+                }
+            }
+            Ok(())
+        }
+        visit_dir(Path::new(""), &self.root, &mut sources)?;
+        Ok(sources)
+    }
+
+    pub fn build_site(&self, target: &Path) -> Result<(), FleenError> {
+        if self.root.ancestors().any(|a| a == target) ||
+            target.ancestors().any(|a| a == self.root) {
+            return Err(TargetDir)
+        }
+
+        let actions = self.compile()?;
+        for action in actions.into_iter() {
+            action.file_operation(&self.root, target)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn find_rendered_index(actions: &Vec<RenderOutput>, path: &str) -> Option<usize> {
+        let path = PathBuf::from(path);
+        actions.iter().position(|a| {
+            if let RenderOutput::Rendered(p, _) = a && p == &path {
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    fn find_dir_index(actions: &Vec<RenderOutput>, path: &str) -> Option<usize> {
+        let path = PathBuf::from(path);
+        actions.iter().position(|a| {
+            if let RenderOutput::Dir(p) = a && p == &path {
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    fn find_raw_index(actions: &Vec<RenderOutput>, path: &str) -> Option<usize> {
+        let path = PathBuf::from(path);
+        actions.iter().position(|a| {
+            if let RenderOutput::RawFile(p) = a && p == &path {
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    #[test]
+    fn test_compile() {
+        let app = FleenApp::open(PathBuf::from("./testdata")).unwrap();
+        let actions = app.compile().unwrap();
+
+        // Rendered files in the root that exist
+        assert!(find_rendered_index(&actions,"index.html").is_some());
+        assert!(find_rendered_index(&actions,"nolayout.html").is_some());
+        assert!(find_rendered_index(&actions,"not_hidden.html").is_some());
+
+        // Rendered files that are hidden for whatever reason
+        assert!(find_rendered_index(&actions,"hidden.html").is_none());
+        assert!(find_rendered_index(&actions,"_skipped.html").is_none());
+
+        // The original md files are not reproduced:
+        assert!(find_rendered_index(&actions,"index.md").is_none());
+        assert!(find_rendered_index(&actions,"nolayout.md").is_none());
+        assert!(find_rendered_index(&actions,"not_hidden.md").is_none());
+
+        // A subdir
+        assert!(find_dir_index(&actions, "dir").is_some());
+
+        // The thing in it should be made after the dir itself:
+        let file_idx = find_rendered_index(&actions, "dir/subdir.html").unwrap();
+        let dir_idx = find_dir_index(&actions, "dir").unwrap();
+        assert!(file_idx > dir_idx);
+
+        // Raw files should be produced:
+        assert!(find_raw_index(&actions, "raw.txt").is_some());
+
+        // But not hidden ones:
+        assert!(find_raw_index(&actions, "_layouts/post.html").is_none());
     }
 }

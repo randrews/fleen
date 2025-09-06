@@ -88,12 +88,22 @@ impl FleenUi {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let width = ui.available_width() / 3.0;
+                let width = ui.available_width() / 3.0 - 5.0;
                 ui.column(width, |ui| {
                     self.tree_view(ui);
                     just_clicked = self.tree_buttons(ui);
                 });
                 ui.column(width, |ui| self.server_controls(ui));
+                ui.column(width, |ui| {
+                    if ui.add_fill_width(Button::green("Build site...")).clicked() &&
+                        let Some(path) = rfd::FileDialog::new().pick_folder() {
+                        match self.app.as_ref().unwrap().build_site(&path) {
+                            // TODO some kind of temporary notification thing
+                            Ok(()) => { println!("Yay!") }
+                            Err(err) => { self.error = Some(err) }
+                        }
+                    }
+                })
             });
         });
 
