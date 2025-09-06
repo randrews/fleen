@@ -5,7 +5,7 @@ mod ui_ext;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use eframe::egui::{Button, Context, Id, RichText};
+use eframe::egui::{Button, Context, Direction, Id, Layout, RichText};
 use eframe::{egui, Frame};
 use egui_ltreeview::Action;
 use tokio::task::JoinHandle;
@@ -87,10 +87,14 @@ impl FleenUi {
         let mut just_clicked = false;
 
         egui::CentralPanel::default().show(ctx, |ui| {
+            let width = ui.available_width() / 3.0 - 5.0;
+            let height = ui.available_height() - 120.0;
             ui.horizontal(|ui| {
-                let width = ui.available_width() / 3.0 - 5.0;
                 ui.column(width, |ui| {
-                    self.tree_view(ui);
+                    egui::ScrollArea::new([true, true])
+                        .auto_shrink([false, false])
+                        .min_scrolled_height(height)
+                        .show(ui, |ui| self.tree_view(ui));
                     just_clicked = self.tree_buttons(ui);
                 });
                 ui.column(width, |ui| self.server_controls(ui));
