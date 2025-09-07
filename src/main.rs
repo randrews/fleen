@@ -15,7 +15,11 @@ use crate::ui_ext::{ButtonExtensions, UiExtensions};
 
 #[tokio::main]
 async fn main() {
-    let native_options = eframe::NativeOptions::default();
+    let mut native_options = eframe::NativeOptions::default();
+    native_options.viewport = native_options.viewport.with_icon(
+        eframe::icon_data::from_png_bytes(include_bytes!("../icon/128x128@2x.png"))
+            .expect("Failed to load icon")
+    );
     eframe::run_native("Fleen", native_options, Box::new(|_cc| {
         Ok(Box::new(FleenUi::default()))
     })).expect("Error running application");
