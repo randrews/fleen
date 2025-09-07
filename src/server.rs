@@ -30,23 +30,26 @@ fn serve_path(path: String, root: PathBuf) -> impl IntoResponse {
     match render {
         Ok(RenderOutput::Rendered(_, content)) |
         Ok(RenderOutput::Hidden(_, content)) => {
+            // We rendered some output so spit it back
             Response::builder()
                 .status(200)
                 .body(Body::from(content)).unwrap()
         }
         Ok(RenderOutput::RawFile(file)) => {
+            // We were pointed at the raw contents of a file:
             Response::builder()
                 .status(200)
                 .body(Body::from(fs::read(root.join(file)).unwrap_or(vec![]))).unwrap()
         }
         Ok(RenderOutput::NoOutput) |
         Ok(RenderOutput::Dir(_)) => {
-            // TODO a nicer 404 page?
+            // Asked for something that doesn't exist:
             Response::builder()
                 .status(404)
                 .body(Body::from(include_str!("../templates/404.html"))).unwrap()
         }
         Err(err) => {
+            // Oh no!
             Response::builder()
                 .status(500)
                 .body(Body::from(format!("{}", err))).unwrap()

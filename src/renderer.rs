@@ -6,7 +6,6 @@ use markdown::{Constructs, Options, ParseOptions};
 use markdown::mdast::Node;
 use serde::Deserialize;
 use thiserror::Error;
-use crate::fleen_app::FleenError;
 
 /// The things we might return from trying to render a file
 #[derive(Clone, PartialEq, Debug)]

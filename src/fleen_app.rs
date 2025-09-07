@@ -273,35 +273,17 @@ mod tests {
 
     fn find_rendered_index(actions: &Vec<RenderOutput>, path: &str) -> Option<usize> {
         let path = PathBuf::from(path);
-        actions.iter().position(|a| {
-            if let RenderOutput::Rendered(p, _) = a && p == &path {
-                true
-            } else {
-                false
-            }
-        })
+        actions.iter().position(|a| matches!(a, RenderOutput::Rendered(p, _) if p == &path))
     }
 
     fn find_dir_index(actions: &Vec<RenderOutput>, path: &str) -> Option<usize> {
         let path = PathBuf::from(path);
-        actions.iter().position(|a| {
-            if let RenderOutput::Dir(p) = a && p == &path {
-                true
-            } else {
-                false
-            }
-        })
+        actions.iter().position(|a| matches!(a, RenderOutput::Dir(p) if p == &path))
     }
 
     fn find_raw_index(actions: &Vec<RenderOutput>, path: &str) -> Option<usize> {
         let path = PathBuf::from(path);
-        actions.iter().position(|a| {
-            if let RenderOutput::RawFile(p) = a && p == &path {
-                true
-            } else {
-                false
-            }
-        })
+        actions.iter().position(|a| matches!(a, RenderOutput::RawFile(p) if p == &path))
     }
 
     #[test]
