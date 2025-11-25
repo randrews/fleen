@@ -4,6 +4,8 @@ mod server;
 mod ui_ext;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::task::Waker;
 use std::time::{Duration, Instant};
 use eframe::egui::{Button, Context, Id, RichText};
 use eframe::{egui, Frame};
@@ -37,25 +39,27 @@ struct TempMessage {
 }
 
 struct FleenUi {
-    app: Option<FleenApp>,
+    app: Option<Arc<FleenApp>>,
     error: Option<FleenError>,
     message: Option<String>,
     selected_file: Option<String>,
     dialog_mode: Option<DialogMode>,
     server_handle: Option<JoinHandle<()>>,
     server_port: String,
-    image_message: Option<TempMessage>
+    deploy_handle: Option<JoinHandle<Result<String, FleenError>>>,
+    image_message: Option<TempMessage>,
 }
 
 impl Default for FleenUi {
     fn default() -> Self {
         Self {
-            app: None,
+            app: None.into(),
             error: None,
             message: None,
             selected_file: None,
             dialog_mode: None,
             server_handle: None,
+            deploy_handle: None,
             image_message: None,
             server_port: "3000".to_string(),
         }
@@ -71,7 +75,7 @@ impl FleenUi {
             if ui.add_fill_width(Button::blue("Open site...")).clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
                 match FleenApp::open(path.clone()) {
                     Ok(app) => {
-                        self.app = Some(app);
+                        self.app = Some(app.into());
                     }
                     Err(err) => { self.error = Some(err) }
                 }
@@ -80,7 +84,7 @@ impl FleenUi {
             if ui.add_fill_width(Button::green("New site...")).clicked() && let Some(path) = rfd::FileDialog::new().pick_folder() {
                 match FleenApp::create(path.clone()) {
                     Ok(app) => {
-                        self.app = Some(app);
+                        self.app = Some(app.into());
                         self.server_handle = Some(tokio::spawn(start_server(path, 3000)))
                     }
                     Err(err) => { self.error = Some(err) }
@@ -105,16 +109,15 @@ impl FleenUi {
                 });
                 ui.column(width, |ui| self.server_controls(ui));
                 ui.column(width, |ui| {
-                    if ui.add_fill_width(Button::green("Build and deploy")).clicked() {
-                        match self.app.as_ref().unwrap().build_and_deploy() {
-                            Ok(output) => { self.message = Some(format!("Site built and deployed:\n\n{}", output)) }
-                            Err(err) => { self.error = Some(err) }
+                    ui.add_enabled_ui(self.deploy_handle.is_none(), |ui| {
+                        if ui.add_fill_width(Button::green("Build and deploy")).clicked() {
+                            self.build_and_deploy();
                         }
-                    }
+                    });
 
                     if ui.add_fill_width(Button::blue("Build site...")).clicked() &&
                         let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        match self.app.as_ref().unwrap().build_site(&path) {
+                        match self.app.as_ref().as_ref().unwrap().build_site(&path) {
                             Ok(()) => { self.message = Some("Site built successfully".to_string()) }
                             Err(err) => { self.error = Some(err) }
                         }
@@ -131,12 +134,19 @@ impl FleenUi {
         }
     }
 
+    fn build_and_deploy(&mut self) {
+        match self.app.as_ref().unwrap().build_and_deploy() {
+            Ok(handle) => { self.deploy_handle = Some(handle) },
+            Err(err) => { self.error = Some(err) }
+        }
+    }
+
     fn tree_view(&mut self, ui: &mut egui::Ui) {
         let tv = egui_ltreeview::TreeView::new(Id::from("tree"))
             .allow_multi_selection(false)
             .allow_drag_and_drop(false);
         let (_, actions) = tv.show(ui, |builder| {
-            for entry in self.app.as_mut().unwrap().file_tree_entries().into_iter() {
+            for entry in self.app.clone().as_mut().unwrap().file_tree_entries().into_iter() {
                 match entry {
                     TreeEntry::File(p) => builder.leaf(id_for_path(&p), label_for_path(&p)),
                     TreeEntry::Dir(p) => { builder.dir(id_for_path(&p), label_for_path(&p)); },
@@ -351,6 +361,19 @@ impl FleenUi {
 
 impl eframe::App for FleenUi {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
+        if let Some(handle) = self.deploy_handle.as_ref() {
+            if handle.is_finished() {
+                let handle = self.deploy_handle.take().unwrap();
+                let result = futures::executor::block_on(async move { handle.await });
+                match result {
+                    Err(e) => { self.error = Some(FleenError::DeployError(e.to_string())) }
+                    Ok(Err(e)) => { self.error = Some(e) }
+                    Ok(Ok(s)) => { self.message = Some(s) }
+                }
+            }
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+
         match &mut self.app {
             None => self.site_chooser(ctx),
             Some(_) => self.display(ctx)

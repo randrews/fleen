@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use clipboard_rs::Clipboard;
 use clipboard_rs::common::RustImage;
+use tempfile::TempDir;
 use thiserror::Error;
 use tinyrand::{Rand, Seeded};
+use tokio::task::JoinHandle;
 use crate::fleen_app::FleenError::{RootDirNonexistence, RootDirPopulated, TargetDir};
 use crate::fleen_app::TreeEntry::{CloseDir, Dir};
 use crate::renderer;
@@ -284,7 +286,7 @@ impl FleenApp {
         Ok(())
     }
 
-    pub fn build_and_deploy(&self) -> Result<String, FleenError> {
+    pub fn build_and_deploy(&self) -> Result<JoinHandle<Result<String, FleenError>>, FleenError> {
         let output_dir = tempfile::tempdir().map_err(|_| TargetDir)?;
         self.build_site(&output_dir.path())?; // Attempt to build the site somewhere
 
@@ -294,10 +296,20 @@ impl FleenApp {
         } else {
             let mut command = Command::new(deploy_script_path);
             command.current_dir(output_dir.path()); // don't consume dir!
-            match command.output() {
+            Ok(self.build_and_deploy_inner(output_dir, command))
+        }
+    }
+
+    fn build_and_deploy_inner(&self, output_dir: TempDir, mut command: Command) -> JoinHandle<Result<String, FleenError>> {
+        tokio::spawn(async move {
+            let output = command.output();
+            let status = command.status().unwrap();
+            output_dir.close().map_err(|e| FleenError::Io(e))?;
+
+            match output {
                 Ok(output) => {
                     let output = String::from_utf8(output.stdout).unwrap_or("Error reading deploy script output".to_string());
-                    if command.status().unwrap().success() {
+                    if status.success() {
                         Ok(output)
                     } else {
                         Err(FleenError::DeployError(output))
@@ -307,7 +319,7 @@ impl FleenApp {
                     Err(FleenError::DeployError(e.to_string()))
                 }
             }
-        }
+        })
     }
 }
 
