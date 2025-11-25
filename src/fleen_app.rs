@@ -32,7 +32,11 @@ pub enum FleenError {
     #[error("Target dir is invalid (can't contain the app dir or vice versa)")]
     TargetDir,
     #[error("IO error: {0}")]
-    Io(#[from] io::Error)
+    Io(#[from] io::Error),
+    #[error("Deploy script missing! Create _scripts/deploy.sh")]
+    ScriptMissing,
+    #[error("Deploy script error:\n\n{0}")]
+    DeployError(String)
 }
 
 #[derive(Clone, Debug)]
@@ -278,6 +282,32 @@ impl FleenApp {
             action.file_operation(&self.root, target)?;
         }
         Ok(())
+    }
+
+    pub fn build_and_deploy(&self) -> Result<String, FleenError> {
+        let output_dir = tempfile::tempdir().map_err(|_| TargetDir)?;
+        self.build_site(&output_dir.path())?; // Attempt to build the site somewhere
+
+        let deploy_script_path = self.root.join("_scripts/deploy.sh");
+        if !deploy_script_path.exists() {
+            Err(FleenError::ScriptMissing)
+        } else {
+            let mut command = Command::new(deploy_script_path);
+            command.current_dir(output_dir.path()); // don't consume dir!
+            match command.output() {
+                Ok(output) => {
+                    let output = String::from_utf8(output.stdout).unwrap_or("Error reading deploy script output".to_string());
+                    if command.status().unwrap().success() {
+                        Ok(output)
+                    } else {
+                        Err(FleenError::DeployError(output))
+                    }
+                },
+                Err(e) => {
+                    Err(FleenError::DeployError(e.to_string()))
+                }
+            }
+        }
     }
 }
 

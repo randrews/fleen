@@ -39,6 +39,7 @@ struct TempMessage {
 struct FleenUi {
     app: Option<FleenApp>,
     error: Option<FleenError>,
+    message: Option<String>,
     selected_file: Option<String>,
     dialog_mode: Option<DialogMode>,
     server_handle: Option<JoinHandle<()>>,
@@ -51,6 +52,7 @@ impl Default for FleenUi {
         Self {
             app: None,
             error: None,
+            message: None,
             selected_file: None,
             dialog_mode: None,
             server_handle: None,
@@ -103,11 +105,17 @@ impl FleenUi {
                 });
                 ui.column(width, |ui| self.server_controls(ui));
                 ui.column(width, |ui| {
-                    if ui.add_fill_width(Button::green("Build site...")).clicked() &&
+                    if ui.add_fill_width(Button::green("Build and deploy")).clicked() {
+                        match self.app.as_ref().unwrap().build_and_deploy() {
+                            Ok(output) => { self.message = Some(format!("Site built and deployed:\n\n{}", output)) }
+                            Err(err) => { self.error = Some(err) }
+                        }
+                    }
+
+                    if ui.add_fill_width(Button::blue("Build site...")).clicked() &&
                         let Some(path) = rfd::FileDialog::new().pick_folder() {
                         match self.app.as_ref().unwrap().build_site(&path) {
-                            // TODO some kind of temporary notification thing
-                            Ok(()) => { println!("Yay!") }
+                            Ok(()) => { self.message = Some("Site built successfully".to_string()) }
                             Err(err) => { self.error = Some(err) }
                         }
                     }
@@ -354,6 +362,16 @@ impl eframe::App for FleenUi {
                 ui.label(message);
                 if ui.button("I see").clicked() {
                     self.error = None
+                }
+            });
+        }
+
+        if let Some(message) = &self.message {
+            let message = message.clone();
+            egui::Window::new("FYI").collapsible(false).resizable(false).show(ctx, |ui| {
+                ui.label(message);
+                if ui.button("Thanks!").clicked() {
+                    self.message = None
                 }
             });
         }

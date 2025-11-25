@@ -15,6 +15,7 @@ axum = "0.8.4"
 tokio = { version = "1.47.1", features = ["full"] }
 tinyrand = "0.5.0"
 clipboard-rs = "0.3.0"
+tempfile = "3.23.0"
 
 [package.metadata.bundle]
 identifier = "org.geekfu.fleen"
