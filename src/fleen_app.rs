@@ -241,7 +241,7 @@ impl FleenApp {
             for entry in root.join(dir).read_dir().unwrap() {
                 let file = PathBuf::from(entry.unwrap().file_name());
                 sources.push(renderer::file_render(dir.join(&file), root)?);
-                if root.join(&dir).join(&file).is_dir() {
+                if root.join(dir).join(&file).is_dir() {
                     // root + dir + file is a child directory, so we want to recurse...
                     // into dir + file.
                     visit_dir(&dir.join(&file), root, sources)?
@@ -254,12 +254,26 @@ impl FleenApp {
     }
 
     pub fn build_site(&self, target: &Path) -> Result<(), FleenError> {
+        // Ensure neither the target nor src dirs are ancestors of the other
         if self.root.ancestors().any(|a| a == target) ||
             target.ancestors().any(|a| a == self.root) {
             return Err(TargetDir)
         }
 
+        // Clear the target directory first:
+        for entry in fs::read_dir(target)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                fs::remove_dir_all(entry.path())?
+            } else {
+                fs::remove_file(entry.path())?
+            }
+        }
+
+        // Decide which actions we need to do to build the site
         let actions = self.compile()?;
+
+        // And then do them!
         for action in actions.into_iter() {
             action.file_operation(&self.root, target)?;
         }

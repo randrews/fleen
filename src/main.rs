@@ -5,7 +5,7 @@ mod ui_ext;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use eframe::egui::{Button, Context, Direction, Id, Layout, RichText};
+use eframe::egui::{Button, Context, Id, RichText};
 use eframe::{egui, Frame};
 use egui_ltreeview::Action;
 use tokio::task::JoinHandle;

@@ -39,7 +39,7 @@ fn serve_path(path: String, root: PathBuf) -> impl IntoResponse {
             // We were pointed at the raw contents of a file:
             Response::builder()
                 .status(200)
-                .body(Body::from(fs::read(root.join(file)).unwrap_or(vec![]))).unwrap()
+                .body(Body::from(fs::read(root.join(file)).unwrap_or_default())).unwrap()
         }
         Ok(RenderOutput::NoOutput) |
         Ok(RenderOutput::Dir(_)) => {
