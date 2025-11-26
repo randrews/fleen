@@ -84,9 +84,11 @@ impl FleenApp {
 
     fn initialize_site(root: PathBuf) -> Result<(), io::Error> {
         fs::create_dir(root.join("_layouts"))?;
+        fs::create_dir(root.join("_scripts"))?;
         fs::create_dir(root.join("assets"))?;
         fs::create_dir(root.join("images"))?;
         fs::write(root.join("_layouts/default.html"), include_str!("../templates/default_layout.html"))?;
+        fs::write(root.join("_scripts/deploy.sh"), include_str!("../templates/deploy.sh"))?;
         fs::write(root.join("assets/.keep"), "")?;
         fs::write(root.join("images/.keep"), "")?;
         Ok(())
@@ -100,7 +102,8 @@ impl FleenApp {
             fn visit_dir(dir: &Path, entries: &mut Vec<TreeEntry>) {
                 for entry in dir.read_dir().unwrap() {
                     let path = entry.unwrap().path();
-                    if path.is_file() && !path.file_name().unwrap().to_str().unwrap().starts_with('.') {
+                    if path.file_name().unwrap().to_str().unwrap().starts_with('.') { continue }
+                    if path.is_file() {
                         entries.push(TreeEntry::File(path))
                     } else if path.is_dir() {
                         entries.push(Dir(path.clone()));

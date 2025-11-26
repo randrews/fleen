@@ -5,6 +5,6 @@
 # stdout will be displayed in a dialog.
 
 # Example:
-# rsync -r . root@example.com:/var/www/html 2>&1 && echo "Site deployed!"
+# rsync -r --delete . root@example.com:/var/www/html 2>&1 && echo "Site deployed!"
 
 echo "Edit _scripts/deploy.sh to set up deploy script"
