@@ -290,7 +290,7 @@ impl FleenApp {
 
     pub async fn build_and_deploy(&self) -> Result<String, FleenError> {
         let output_dir = tempfile::tempdir().map_err(|_| TargetDir)?;
-        self.build_site(&output_dir.path())?; // Attempt to build the site somewhere
+        self.build_site(output_dir.path())?; // Attempt to build the site somewhere
 
         let deploy_script_path = self.root.join("_scripts/deploy.sh");
         if !deploy_script_path.exists() {

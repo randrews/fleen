@@ -4,8 +4,7 @@ mod server;
 mod ui_ext;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::task::Waker;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use eframe::egui::{Button, Context, Id, RichText};
 use eframe::{egui, Frame};
@@ -54,7 +53,7 @@ struct FleenUi {
 impl Default for FleenUi {
     fn default() -> Self {
         Self {
-            app: None.into(),
+            app: None,
             error: None,
             message: None,
             selected_file: None,
