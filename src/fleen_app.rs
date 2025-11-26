@@ -1,13 +1,11 @@
-use std::cell::RefCell;
 use std::{fs, io, time};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::RwLock;
 use clipboard_rs::Clipboard;
 use clipboard_rs::common::RustImage;
-use tempfile::TempDir;
 use thiserror::Error;
 use tinyrand::{Rand, Seeded};
-use tokio::task::JoinHandle;
 use crate::fleen_app::FleenError::{RootDirNonexistence, RootDirPopulated, TargetDir};
 use crate::fleen_app::TreeEntry::{CloseDir, Dir};
 use crate::renderer;
@@ -55,13 +53,13 @@ pub enum FileType {
 
 pub struct FleenApp {
     root: PathBuf,
-    files_cache: RefCell<Option<Vec<TreeEntry>>>
+    files_cache: RwLock<Option<Vec<TreeEntry>>>
 }
 
 impl FleenApp {
     pub fn open(root: PathBuf) -> Result<Self, FleenError> {
         match root.try_exists() {
-            Ok(true) => Ok(Self { root, files_cache: RefCell::new(None) }),
+            Ok(true) => Ok(Self { root, files_cache: RwLock::new(None) }),
             _ => Err(RootDirNonexistence(root))
         }
     }
@@ -73,7 +71,7 @@ impl FleenApp {
                     Err(RootDirPopulated(root))
                 } else {
                     Self::initialize_site(root.clone()).map_err(|e| FleenError::FileIo(String::from("creating site"), e.to_string()))?;
-                    Ok(Self { root, files_cache: RefCell::new(None) })
+                    Ok(Self { root, files_cache: RwLock::new(None) })
                 }
             }
             Err(_) => {
@@ -96,7 +94,7 @@ impl FleenApp {
 
     // TODO: This is panicky as hell, make it return a Result
     fn refresh_file_cache(&self, force: bool) {
-        if self.files_cache.borrow().is_none() || force {
+        if self.files_cache.read().unwrap().is_none() || force {
             let mut entries = vec![];
 
             fn visit_dir(dir: &Path, entries: &mut Vec<TreeEntry>) {
@@ -117,13 +115,14 @@ impl FleenApp {
             visit_dir(&self.root, &mut entries);
             entries.push(CloseDir);
 
-            self.files_cache.replace(Some(entries));
+            self.files_cache.write().unwrap().replace(entries);
         }
     }
 
     pub fn file_tree_entries(&self) -> impl IntoIterator<Item=TreeEntry> {
         self.refresh_file_cache(false);
-        self.files_cache.borrow().clone().expect("Can't happen because we just refreshed the cache")
+        // We need to clone these because the rwlock owns them
+        self.files_cache.read().unwrap().clone().expect("Can't happen because we just refreshed the cache")
     }
 
     pub fn open_filename(&self, filename: &str) -> Result<(), FleenError> {
@@ -289,7 +288,7 @@ impl FleenApp {
         Ok(())
     }
 
-    pub fn build_and_deploy(&self) -> Result<JoinHandle<Result<String, FleenError>>, FleenError> {
+    pub async fn build_and_deploy(&self) -> Result<String, FleenError> {
         let output_dir = tempfile::tempdir().map_err(|_| TargetDir)?;
         self.build_site(&output_dir.path())?; // Attempt to build the site somewhere
 
@@ -299,30 +298,16 @@ impl FleenApp {
         } else {
             let mut command = Command::new(deploy_script_path);
             command.current_dir(output_dir.path()); // don't consume dir!
-            Ok(self.build_and_deploy_inner(output_dir, command))
-        }
-    }
+            let output = command.output().map_err(|e| FleenError::DeployError(e.to_string()))?;
+            let status = command.status()?;
 
-    fn build_and_deploy_inner(&self, output_dir: TempDir, mut command: Command) -> JoinHandle<Result<String, FleenError>> {
-        tokio::spawn(async move {
-            let output = command.output();
-            let status = command.status().unwrap();
-            output_dir.close().map_err(|e| FleenError::Io(e))?;
-
-            match output {
-                Ok(output) => {
-                    let output = String::from_utf8(output.stdout).unwrap_or("Error reading deploy script output".to_string());
-                    if status.success() {
-                        Ok(output)
-                    } else {
-                        Err(FleenError::DeployError(output))
-                    }
-                },
-                Err(e) => {
-                    Err(FleenError::DeployError(e.to_string()))
-                }
+            let output = String::from_utf8(output.stdout).unwrap_or("Error reading deploy script output".to_string());
+            if status.success() {
+                Ok(output)
+            } else {
+                Err(FleenError::DeployError(output))
             }
-        })
+        }
     }
 }
 

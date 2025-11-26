@@ -4,7 +4,7 @@ mod server;
 mod ui_ext;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::Waker;
 use std::time::{Duration, Instant};
 use eframe::egui::{Button, Context, Id, RichText};
@@ -46,7 +46,8 @@ struct FleenUi {
     dialog_mode: Option<DialogMode>,
     server_handle: Option<JoinHandle<()>>,
     server_port: String,
-    deploy_handle: Option<JoinHandle<Result<String, FleenError>>>,
+    deploy_response: Arc<Mutex<Option<Result<String, FleenError>>>>,
+    deploying: bool,
     image_message: Option<TempMessage>,
 }
 
@@ -59,7 +60,8 @@ impl Default for FleenUi {
             selected_file: None,
             dialog_mode: None,
             server_handle: None,
-            deploy_handle: None,
+            deploy_response: Mutex::new(None).into(),
+            deploying: false,
             image_message: None,
             server_port: "3000".to_string(),
         }
@@ -109,8 +111,13 @@ impl FleenUi {
                 });
                 ui.column(width, |ui| self.server_controls(ui));
                 ui.column(width, |ui| {
-                    ui.add_enabled_ui(self.deploy_handle.is_none(), |ui| {
-                        if ui.add_fill_width(Button::green("Build and deploy")).clicked() {
+                    ui.add_enabled_ui(!self.deploying, |ui| {
+                        let label = if self.deploying {
+                            "Deploying..."
+                        } else {
+                            "Build and Deploy"
+                        };
+                        if ui.add_fill_width(Button::green(label)).clicked() {
                             self.build_and_deploy();
                         }
                     });
@@ -135,10 +142,15 @@ impl FleenUi {
     }
 
     fn build_and_deploy(&mut self) {
-        match self.app.as_ref().unwrap().build_and_deploy() {
-            Ok(handle) => { self.deploy_handle = Some(handle) },
-            Err(err) => { self.error = Some(err) }
-        }
+        self.deploying = true;
+        let mutex = self.deploy_response.clone();
+        let app = self.app.as_ref().unwrap().clone();
+        tokio::spawn(async move {
+            let result = app.build_and_deploy().await;
+            if let Ok(mut m) = mutex.lock() {
+                *m = Some(result);
+            }
+        });
     }
 
     fn tree_view(&mut self, ui: &mut egui::Ui) {
@@ -361,15 +373,13 @@ impl FleenUi {
 
 impl eframe::App for FleenUi {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
-        if let Some(handle) = self.deploy_handle.as_ref() {
-            if handle.is_finished() {
-                let handle = self.deploy_handle.take().unwrap();
-                let result = futures::executor::block_on(async move { handle.await });
+        if self.deploying && let Ok(mut m) = self.deploy_response.lock() {
+            if let Some(result) = m.take() {
                 match result {
-                    Err(e) => { self.error = Some(FleenError::DeployError(e.to_string())) }
-                    Ok(Err(e)) => { self.error = Some(e) }
-                    Ok(Ok(s)) => { self.message = Some(s) }
+                    Err(e) => { self.error = Some(e) }
+                    Ok(s) => { self.message = Some(s) }
                 }
+                self.deploying = false;
             }
             ctx.request_repaint_after(Duration::from_millis(100));
         }
