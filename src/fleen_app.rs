@@ -1,14 +1,14 @@
-use std::{fs, io, time};
+use std::{fs, io};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::RwLock;
+use std::sync::Arc;
 use clipboard_rs::Clipboard;
 use clipboard_rs::common::RustImage;
 use thiserror::Error;
-use tinyrand::{Rand, Seeded};
 use crate::fleen_app::FleenError::{RootDirNonexistence, RootDirPopulated, TargetDir};
 use crate::fleen_app::TreeEntry::{CloseDir, Dir};
-use crate::renderer;
+use crate::{renderer, utils};
 use crate::renderer::{RenderError, RenderOutput};
 
 #[derive(Error, Debug)]
@@ -51,217 +51,63 @@ pub enum FileType {
     File, Dir
 }
 
-pub struct FleenApp {
-    root: PathBuf,
-    files_cache: RwLock<Option<Vec<TreeEntry>>>
+pub struct Site {
+    pub tree: Vec<TreeEntry>,
+    pub root: PathBuf,
 }
 
-impl FleenApp {
-    pub fn open(root: PathBuf) -> Result<Self, FleenError> {
+impl Site {
+    pub fn open(root: &Path) -> Result<Self, FleenError> {
         match root.try_exists() {
-            Ok(true) => Ok(Self { root, files_cache: RwLock::new(None) }),
-            _ => Err(RootDirNonexistence(root))
+            Ok(true) => Ok(Self { root: root.to_path_buf(), tree: read_tree(root)? }),
+            _ => Err(RootDirNonexistence(root.to_path_buf()))
         }
     }
 
-    pub fn create(root: PathBuf) -> Result<Self, FleenError> {
+    pub fn create(root: &Path) -> Result<Self, FleenError> {
         match root.read_dir() {
             Ok(mut iter) => {
                 if iter.next().is_some() {
-                    Err(RootDirPopulated(root))
+                    Err(RootDirPopulated(root.to_path_buf()))
                 } else {
-                    Self::initialize_site(root.clone()).map_err(|e| FleenError::FileIo(String::from("creating site"), e.to_string()))?;
-                    Ok(Self { root, files_cache: RwLock::new(None) })
+                    utils::initialize_site(root).map_err(|e| FleenError::FileIo(String::from("creating site"), e.to_string()))?;
+                    Self::open(root)
                 }
             }
             Err(_) => {
-                Err(RootDirNonexistence(root))
+                Err(RootDirNonexistence(root.to_path_buf()))
+            }
+        }
+    }
+}
+
+// TODO: This is panicky as hell, make it return a Result
+fn read_tree(root: &Path) -> Result<Vec<TreeEntry>, FleenError> {
+    let mut entries = vec![];
+
+    fn visit_dir(dir: &Path, entries: &mut Vec<TreeEntry>) {
+        for entry in dir.read_dir().unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().unwrap().to_str().unwrap().starts_with('.') { continue }
+            if path.is_file() {
+                entries.push(TreeEntry::File(path))
+            } else if path.is_dir() {
+                entries.push(Dir(path.clone()));
+                visit_dir(&path, entries);
+                entries.push(CloseDir)
             }
         }
     }
 
-    fn initialize_site(root: PathBuf) -> Result<(), io::Error> {
-        fs::create_dir(root.join("_layouts"))?;
-        fs::create_dir(root.join("_scripts"))?;
-        fs::create_dir(root.join("assets"))?;
-        fs::create_dir(root.join("images"))?;
-        fs::write(root.join("_layouts/default.html"), include_str!("../templates/default_layout.html"))?;
-        fs::write(root.join("_scripts/deploy.sh"), include_str!("../templates/deploy.sh"))?;
-        fs::write(root.join("assets/.keep"), "")?;
-        fs::write(root.join("images/.keep"), "")?;
-        Ok(())
-    }
+    entries.push(Dir(root.to_path_buf()));
+    visit_dir(root, &mut entries);
+    entries.push(CloseDir);
 
-    // TODO: This is panicky as hell, make it return a Result
-    fn refresh_file_cache(&self, force: bool) {
-        if self.files_cache.read().unwrap().is_none() || force {
-            let mut entries = vec![];
+    Ok(entries)
+}
 
-            fn visit_dir(dir: &Path, entries: &mut Vec<TreeEntry>) {
-                for entry in dir.read_dir().unwrap() {
-                    let path = entry.unwrap().path();
-                    if path.file_name().unwrap().to_str().unwrap().starts_with('.') { continue }
-                    if path.is_file() {
-                        entries.push(TreeEntry::File(path))
-                    } else if path.is_dir() {
-                        entries.push(Dir(path.clone()));
-                        visit_dir(&path, entries);
-                        entries.push(CloseDir)
-                    }
-                }
-            }
-
-            entries.push(Dir(self.root.clone()));
-            visit_dir(&self.root, &mut entries);
-            entries.push(CloseDir);
-
-            self.files_cache.write().unwrap().replace(entries);
-        }
-    }
-
-    pub fn file_tree_entries(&self) -> impl IntoIterator<Item=TreeEntry> {
-        self.refresh_file_cache(false);
-        // We need to clone these because the rwlock owns them
-        self.files_cache.read().unwrap().clone().expect("Can't happen because we just refreshed the cache")
-    }
-
-    pub fn open_filename(&self, filename: &str) -> Result<(), FleenError> {
-        // TODO this doesn't work for html files. We really want to open things in a platform-dependent way
-        // - md, html, all other text, should open in gedit on linux or the user's preferred editor on mac
-        // - images should open in an image viewer preferably
-        // - dirs should open in a file browser
-        // - on mac we can open -t to force a text editor
-        // - on linux we should maybe allow a FLEEN_EDITOR env var, defaulting to EDITOR if missing?
-        Command::new("open").arg(filename).spawn().map_err(|err| {
-            FleenError::FileIo(filename.to_owned(), err.to_string())
-        })?;
-        Ok(())
-    }
-
-    pub fn open_server(&self, port: &str) {
-        // If this doesn't work, not like I can do much about it.
-        let _ = Command::new("open").arg(format!("http://localhost:{}", port)).spawn();
-    }
-
-    pub fn create_page(&self, file_type: FileType, name: &str, parent: Option<&String>) -> Result<(), FleenError> {
-        let mut target = match parent {
-            Some(s) => PathBuf::from(s),
-            None => self.root.clone()
-        };
-        if matches!(file_type, FileType::Dir) {
-            while target.is_file() { target.pop(); }
-        }
-
-        target.push(name);
-        if target.exists() {
-            return Err(FleenError::FileExists(target))
-        }
-
-        let contents = if name.ends_with(".md") {
-            include_str!("../templates/markdown_template.md")
-        } else if name.ends_with(".html") {
-            include_str!("../templates/default_layout.html")
-        } else {
-            ""
-        };
-
-        match file_type {
-            FileType::File => fs::write(target.clone(), contents),
-            FileType::Dir => fs::create_dir(target.clone())
-        }.map_err(|err| FleenError::FileCreate(target.clone(), err.to_string()))?;
-
-        self.refresh_file_cache(true);
-        if file_type == FileType::File {
-            self.open_filename(target.to_string_lossy().as_ref())?
-        }
-        Ok(())
-    }
-
-    pub fn delete_page(&self, path: &String) -> Result<(), FleenError> {
-        let target = PathBuf::from(path);
-        if target.is_dir() {
-            fs::remove_dir_all(target)
-        } else {
-            fs::remove_file(target)
-        }.map_err(|err| FleenError::FileIo(path.clone(), err.to_string()))?;
-        self.refresh_file_cache(true);
-        Ok(())
-    }
-
-    pub fn rename_page(&self, target: &String, new_name: &str) -> Result<(), FleenError> {
-        let path = PathBuf::from(target);
-        let mut new_path = path.clone();
-        new_path.set_file_name(new_name);
-        fs::rename(path, new_path).map_err(|err| FleenError::FileIo(target.clone(), err.to_string()))?;
-        self.refresh_file_cache(true);
-        Ok(())
-    }
-
-    pub fn root_path(&self) -> String {
-        self.root.to_string_lossy().to_string()
-    }
-
-    pub fn image_dir_exists(&self) -> bool {
-        self.root.join("images").is_dir()
-    }
-
-    pub fn unique_image_name(&self) -> Result<PathBuf, FleenError> {
-        if !self.image_dir_exists() { return Err(FleenError::NoImageDir) }
-        let mut rng = tinyrand::StdRand::seed(time::SystemTime::now().duration_since(time::UNIX_EPOCH).unwrap().as_secs());
-        loop {
-            let fname = format!("image_{}.png", Self::random_name(&mut rng));
-            let path = self.root.join("images").join(fname);
-            if !path.exists() {
-                return Ok(path)
-            }
-        }
-    }
-
-    fn random_name(rng: &mut tinyrand::StdRand) -> String {
-        let mut s = String::new();
-        let chs = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
-        for _ in 0..8 {
-            let n = rng.next_lim_usize(chs.len());
-            s.push(chs[n]);
-        }
-        s
-    }
-
-    pub fn paste_image(&self) -> Result<String, FleenError> {
-        let c = clipboard_rs::ClipboardContext::new().map_err(|_| FleenError::NoClipboardImage)?;
-        let img = c.get_image().map_err(|_| FleenError::NoClipboardImage)?;
-        let target_path = self.unique_image_name()?;
-        img.save_to_path(target_path.to_str().unwrap()).map_err(|e| FleenError::FileCreate(target_path.clone(), e.to_string()))?;
-        self.refresh_file_cache(true);
-        let uri = format!("/images/{}", target_path.file_name().unwrap().to_str().unwrap());
-        let _ = c.set_text(format!("![]({})", uri));
-        Ok("Image saved!".to_string())
-    }
-
-    pub fn compile(&self) -> Result<Vec<RenderOutput>, FleenError> {
-        let mut sources = vec![]; // The list of renderoutputs we need to perform
-
-        // Traverse a directory
-        fn visit_dir(dir: &Path, root: &Path, sources: &mut Vec<RenderOutput>) -> Result<(), RenderError> {
-            // Root is the app root. Dir is the directory path within the app root, like "assets".
-            // File is the filename (or child dir name) within the dir, so, root+dir+file is an
-            // absolute path
-            for entry in root.join(dir).read_dir().unwrap() {
-                let file = PathBuf::from(entry.unwrap().file_name());
-                sources.push(renderer::file_render(dir.join(&file), root)?);
-                if root.join(dir).join(&file).is_dir() {
-                    // root + dir + file is a child directory, so we want to recurse...
-                    // into dir + file.
-                    visit_dir(&dir.join(&file), root, sources)?
-                }
-            }
-            Ok(())
-        }
-        visit_dir(Path::new(""), &self.root, &mut sources)?;
-        Ok(sources)
-    }
-
-    pub fn build_site(&self, target: &Path) -> Result<(), FleenError> {
+pub trait SiteActions: Deref<Target=Site> + Clone {
+    fn build_site(&self, target: &Path) -> Result<(), FleenError> {
         // Ensure neither the target nor src dirs are ancestors of the other
         if self.root.ancestors().any(|a| a == target) ||
             target.ancestors().any(|a| a == self.root) {
@@ -288,9 +134,32 @@ impl FleenApp {
         Ok(())
     }
 
-    pub async fn build_and_deploy(&self) -> Result<String, FleenError> {
+    fn compile(&self) -> Result<Vec<RenderOutput>, FleenError> {
+        let mut sources = vec![]; // The list of renderoutputs we need to perform
+
+        // Traverse a directory
+        fn visit_dir(dir: &Path, root: &Path, sources: &mut Vec<RenderOutput>) -> Result<(), RenderError> {
+            // Root is the app root. Dir is the directory path within the app root, like "assets".
+            // File is the filename (or child dir name) within the dir, so, root+dir+file is an
+            // absolute path
+            for entry in root.join(dir).read_dir().unwrap() {
+                let file = PathBuf::from(entry.unwrap().file_name());
+                sources.push(renderer::file_render(dir.join(&file), root)?);
+                if root.join(dir).join(&file).is_dir() {
+                    // root + dir + file is a child directory, so we want to recurse...
+                    // into dir + file.
+                    visit_dir(&dir.join(&file), root, sources)?
+                }
+            }
+            Ok(())
+        }
+        visit_dir(Path::new(""), &self.root, &mut sources)?;
+        Ok(sources)
+    }
+
+    async fn build_and_deploy(&self) -> Result<String, FleenError> {
         let output_dir = tempfile::tempdir().map_err(|_| TargetDir)?;
-        self.build_site(output_dir.path())?; // Attempt to build the site somewhere
+        self.clone().build_site(output_dir.path())?; // Attempt to build the site somewhere
 
         let deploy_script_path = self.root.join("_scripts/deploy.sh");
         if !deploy_script_path.exists() {
@@ -309,7 +178,81 @@ impl FleenApp {
             }
         }
     }
+
+    /// Return whether the images/ directory actually exists for this site
+    fn image_dir_exists(&self) -> bool {
+        self.root.join("images").is_dir()
+    }
+
+    fn paste_image(&self) -> Result<Site, FleenError> {
+        let c = clipboard_rs::ClipboardContext::new().map_err(|_| FleenError::NoClipboardImage)?;
+        if !self.image_dir_exists() { return Err(FleenError::NoImageDir) }
+        let img = c.get_image().map_err(|_| FleenError::NoClipboardImage)?;
+        let target_path = utils::unique_image_name(&self.root.join("images"))?;
+        img.save_to_path(target_path.to_str().unwrap()).map_err(|e| FleenError::FileCreate(target_path.clone(), e.to_string()))?;
+        let new_tree = read_tree(&self.root)?;
+        let uri = format!("/images/{}", target_path.file_name().unwrap().to_str().unwrap());
+        let _ = c.set_text(format!("![]({})", uri));
+        Ok(Site { root: self.root.to_path_buf(), tree: new_tree })
+    }
+
+    fn create_page(&self, file_type: FileType, name: &str, parent: Option<&String>) -> Result<Site, FleenError> {
+        let mut target = match parent {
+            Some(s) => PathBuf::from(s),
+            None => self.root.clone()
+        };
+        if matches!(file_type, FileType::Dir) {
+            while target.is_file() { target.pop(); }
+        }
+
+        target.push(name);
+        if target.exists() {
+            return Err(FleenError::FileExists(target))
+        }
+
+        let contents = if name.ends_with(".md") {
+            include_str!("../templates/markdown_template.md")
+        } else if name.ends_with(".html") {
+            include_str!("../templates/default_layout.html")
+        } else {
+            ""
+        };
+
+        match file_type {
+            FileType::File => fs::write(target.clone(), contents),
+            FileType::Dir => fs::create_dir(target.clone())
+        }.map_err(|err| FleenError::FileCreate(target.clone(), err.to_string()))?;
+
+        let new_tree = read_tree(&self.root)?;
+        if file_type == FileType::File {
+            utils::open_filename(target.to_string_lossy().as_ref())?
+        }
+        Ok(Site { root: self.root.to_path_buf(), tree: new_tree })
+    }
+
+    fn rename_page(&self, target: &String, new_name: &str) -> Result<Site, FleenError> {
+        let path = PathBuf::from(target);
+        let mut new_path = path.clone();
+        new_path.set_file_name(new_name);
+        fs::rename(path, new_path).map_err(|err| FleenError::FileIo(target.clone(), err.to_string()))?;
+        Ok(Site { root: self.root.to_path_buf(), tree: read_tree(&self.root)? })
+    }
+
+    fn delete_page(&self, path: &String) -> Result<Site, FleenError> {
+        let target = PathBuf::from(path);
+        if target.is_dir() {
+            fs::remove_dir_all(target)
+        } else {
+            fs::remove_file(target)
+        }.map_err(|err| FleenError::FileIo(path.clone(), err.to_string()))?;
+        Ok(Site { root: self.root.clone(), tree: read_tree(&self.root)? })
+    }
 }
+
+impl SiteActions for &Site {}
+impl SiteActions for Arc<Site> {}
+
+////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
@@ -332,8 +275,8 @@ mod tests {
 
     #[test]
     fn test_compile() {
-        let app = FleenApp::open(PathBuf::from("./testdata")).unwrap();
-        let actions = app.compile().unwrap();
+        let app = Site::open(&PathBuf::from("./testdata")).unwrap();
+        let actions = (&app).compile().unwrap();
 
         // Rendered files in the root that exist
         assert!(find_rendered_index(&actions,"index.html").is_some());
